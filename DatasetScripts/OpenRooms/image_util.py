@@ -231,3 +231,42 @@ def split_tenors_from_dict(dict, size):
             a[key] = b[key] = item
     return a, b
 
+
+def binary_thresholding(img, blocksize=5, C=2):
+    assert torch.is_tensor(img), "img should be torch.tensor"
+    img_grey = img.mean(dim=0).clamp(min=0.0, max=1.0).detach().cpu().numpy()
+    denoised = denoise_tv_chambolle(img_grey, weight=0.1)
+    denoised = (denoised * 255.0).astype(np.uint8)
+    binarized = cv2.adaptiveThreshold(denoised, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                      cv2.THRESH_BINARY, blocksize, C)
+#     _, binarized = cv2.threshold(denoised, 0,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU)
+    binarized = (torch.from_numpy(binarized).contiguous() < 127).to(torch.float32)[None, :, :]
+    return binarized
+
+
+def canny_edge_detection(img, th1=100, th2=200, denoise=False):
+    # Check input shape
+    assert torch.is_tensor(img) and img.ndim == 3, "img should be torch.tensor"
+
+    # Convert to uint8 numpy
+    img = img.mean(dim=0).clamp(min=0.0, max=1.0).detach().cpu().numpy()
+    if denoise:
+        img = denoise_tv_chambolle(img, weight=0.05)
+    img = img * 255.0
+    img = img.astype(np.uint8)
+
+    # Edge detection
+    edges = cv2.Canny(img, th1, th2)
+
+    # Convert to torch tensor
+    edges = (torch.from_numpy(edges).contiguous() > 127).to(torch.float32)[None, :, :]
+    return edges
+
+
+def dilate_mask(mask, k=5):
+    assert torch.is_tensor(mask), "mask should be torch.tensor"
+    assert mask.dim() == 3 and mask.shape[0] == 1, f"Error shape: {mask.shape}"
+    kernel = torch.ones((k, k))
+    mask = torch.nn.functional.conv2d(mask.unsqueeze(0), kernel.unsqueeze(0).unsqueeze(0), padding=k // 2)
+    mask = (mask > 0.001).to(torch.float32)
+    return mask.squeeze(0)
