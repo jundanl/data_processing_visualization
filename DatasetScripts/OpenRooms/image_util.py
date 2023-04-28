@@ -8,28 +8,12 @@ import torch
 import torch.nn.functional as F
 from torchvision.transforms import ToTensor
 import matplotlib.pyplot as plt
-
-
-# def rgb_to_srgb(rgb):
-#     ret = torch.zeros_like(rgb)
-#     idx0 = rgb <= 0.0031308
-#     idx1 = rgb > 0.0031308
-#     ret[idx0] = rgb[idx0] * 12.92
-#     ret[idx1] = torch.pow(1.055 * rgb[idx1], 1.0 / 2.4) - 0.055
-#     return ret
+from skimage.restoration import denoise_tv_chambolle
+import cv2
 
 
 def rgb_to_srgb(rgb, gamma=1.0/2.2):
     return rgb.clip(min=0.0) ** gamma
-
-
-# def srgb_to_rgb(srgb):
-#     ret = torch.zeros_like(srgb)
-#     idx0 = srgb <= 0.04045
-#     idx1 = srgb > 0.04045
-#     ret[idx0] = srgb[idx0] / 12.92
-#     ret[idx1] = torch.pow((srgb[idx1] + 0.055) / 1.055, 2.4)
-#     return ret
 
 
 def srgb_to_rgb(srgb, gamma=1.0/2.2):
@@ -81,34 +65,37 @@ def save_srgb_image(image, path, filename):
     image_pil.save(os.path.join(path,filename))
 
 
-def tone_mapping(image, rescale=True, trans2srgb=False):
+def get_tone_mapping_scalar(image):
+    assert image.ndim == 3
     # MAX_SRGB = 1.077837  # SRGB 1.0 = RGB 1.077837
     src_PERCENTILE = 0.9
     dst_VALUE = 0.8
 
-    vis = image.detach()
+    vis = image
+    if vis.size(0) == 1:
+        vis = vis.repeat(3, 1, 1)
+
+    brightness = 0.3 * vis[0, :, :] + 0.59 * vis[1, :, :] + 0.11 * vis[2, :, :]
+    src_value = brightness.quantile(src_PERCENTILE)
+    if src_value < 1.0e-4:
+        scalar = 0.0
+    else:
+        scalar = math.exp(math.log(dst_VALUE) * 2.2 - math.log(src_value))
+    return scalar
+
+
+def tone_mapping(image, rescale=True, trans2srgb=False):
+    assert image.ndim == 3
+    vis = image
     if vis.size(0) == 1:
         vis = vis.repeat(3, 1, 1)
 
     if rescale:
-        brightness = 0.3 * vis[0, :, :] + 0.59 * vis[1, :, :] + 0.11 * vis[2, :, :]
-        src_value = brightness.quantile(src_PERCENTILE)
-        if src_value < 1.0e-4:
-            scalar = 0.0
-        else:
-            scalar = math.exp(math.log(dst_VALUE) * 2.2 - math.log(src_value))
+        scalar = get_tone_mapping_scalar(vis)
         vis = scalar * vis
-        # s = np.percentile(vis.cpu(), 99.9)
-        # # if mask is None:
-        # #     s = np.percentile(vis.numpy(), 99.9)
-        # # else:
-        # #     s = np.percentile(vis[mask > 0.5].numpy(), 99.9)
-        # if s > MAX_SRGB:
-        #     vis = vis / s * MAX_SRGB
 
     vis = torch.clamp(vis, min=0)
     if trans2srgb:
-        # vis[vis > MAX_SRGB] = MAX_SRGB
         vis = rgb_to_srgb(vis)
 
     vis = vis.clamp(min=0.0, max=1.0)
