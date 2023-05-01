@@ -5,6 +5,7 @@ import time
 from collections import namedtuple
 import glob
 import pickle
+import struct
 
 import torch, torchvision
 import torch.nn.functional as F
@@ -170,6 +171,23 @@ class OpenRoomsDataset(data.Dataset):
         normal = self.numpy_images_2_tensor(normal)
         normal = F.normalize(normal, dim=0, p=2)
 
+        # depth
+        depth_path = os.path.join(self.data_dirs["geometry"], dp.c.replace("mainDiffLight", "main"), dp.s,
+                                  f"imdepth_{dp.idx}.dat")
+        with open(depth_path, 'rb') as fIn:
+            # Read the height and width of depth
+            hBuffer = fIn.read(4)
+            height = struct.unpack('i', hBuffer)[0]
+            wBuffer = fIn.read(4)
+            width = struct.unpack('i', wBuffer)[0]
+            # Read depth
+            dBuffer = fIn.read(4 * width * height)
+            depth = np.array(
+                struct.unpack('f' * height * width, dBuffer),
+                dtype=np.float32)
+            depth = depth.reshape(height, width, 1)
+        depth = self.numpy_images_2_tensor(depth)
+
         # mask
         mask = (gt_R.mean(dim=0, keepdim=True) > 1e-5).to(torch.float32) * (1.0 - mask_light)
 
@@ -182,7 +200,7 @@ class OpenRoomsDataset(data.Dataset):
         #             hdr_img, srgb_img, rgb_img, gt_R, gt_S, gt_S_direct, mask, mask_light = data_tuple
         gt_R = gt_R * mask
         return hdr_img, srgb_img, rgb_img, gt_R, gt_S, gt_S_direct, \
-               mask, mask_light, lights, normal, f"{dp.c}_{dp.s}_{dp.idx}"
+               mask, mask_light, lights, normal, depth, f"{dp.c}_{dp.s}_{dp.idx}"
 
     def numpy_images_2_tensor(self, *imgs):
         if len(imgs) == 1:
@@ -194,7 +212,7 @@ class OpenRoomsDataset(data.Dataset):
 
     def __getitem__(self, index):
         hdr_img, srgb_img, rgb_img, gt_R, gt_S, gt_S_direct, \
-        mask, mask_light, lights, normal, filename = self.load_images(self.data_list[index], self.is_train)
+        mask, mask_light, lights, normal, depth, filename = self.load_images(self.data_list[index], self.is_train)
         return {"hdr_img": hdr_img,
                 "srgb_img": srgb_img,
                 "rgb_img": rgb_img,
@@ -205,6 +223,7 @@ class OpenRoomsDataset(data.Dataset):
                 "mask_light": mask_light,
                 "light_sources": lights,
                 "normal": normal,
+                "depth": depth,
                 "index": index,
                 "img_name": filename,
                 "dataset": "OpenRooms"}
