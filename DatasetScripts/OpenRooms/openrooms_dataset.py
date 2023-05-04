@@ -140,20 +140,22 @@ class OpenRoomsDataset(data.Dataset):
         mask_light_path = os.path.join(self.data_dirs["mask_light"], dp.c.replace("mainDiffMat", "main"),
                                        dp.s, f"immask_{dp.idx}.png")
         mask_light = cv2.imread(mask_light_path)[:, :, ::-1].astype(np.float32) / 255.0
-        mask_light = (self.numpy_images_2_tensor(mask_light) < 0.6).to(torch.float32)
+        mask_light = self.numpy_images_2_tensor(mask_light)
+        # mask_light = (self.numpy_images_2_tensor(mask_light) < 0.6).to(torch.float32)
         # light source information
         lights = []
         light_frame_dir = os.path.join(self.data_dirs['light_source'],
                                        dp.c.replace("mainDiffMat", "main"),
                                        dp.s, f"light_{dp.idx}")
-        num_lights = len(glob.glob(os.path.join(light_frame_dir, 'box*.dat')))
+        num_lights = len(glob.glob(os.path.join(light_frame_dir.replace("mainDiffLight", "main"), 'box*.dat')))
+        assert num_lights > 0, f"Not exists light source information: {light_frame_dir.replace('mainDiffLight', 'main')}"
         for i in range(num_lights):
             # is window
-            with open(os.path.join(light_frame_dir, f"box{i}.dat"), 'rb') as fIn:
+            with open(os.path.join(light_frame_dir.replace('mainDiffLight', 'main'), f"box{i}.dat"), 'rb') as fIn:
                 info = pickle.load(fIn)
             is_window = info["isWindow"]
             # light mask
-            l_mask = cv2.imread(os.path.join(light_frame_dir, f"mask{i}.png"))[:, :, ::-1].astype(np.float32) / 255.0
+            l_mask = cv2.imread(os.path.join(light_frame_dir.replace('mainDiffLight', 'main'), f"mask{i}.png"))[:, :, ::-1].astype(np.float32) / 255.0
             l_mask = self.numpy_images_2_tensor(l_mask)
             # direct shading without occlusion
             l_s_direct_wo_occ = cv2.imread(os.path.join(light_frame_dir, f"imDSNoOcclu{i}.rgbe"), -1)[:, :, ::-1]
@@ -172,7 +174,9 @@ class OpenRoomsDataset(data.Dataset):
         normal = F.normalize(normal, dim=0, p=2)
 
         # depth
-        depth_path = os.path.join(self.data_dirs["geometry"], dp.c.replace("mainDiffLight", "main"), dp.s,
+        depth_path = os.path.join(self.data_dirs["geometry"],
+                                  dp.c.replace("mainDiffLight", "main").replace("mainDiffMat", "main"),
+                                  dp.s,
                                   f"imdepth_{dp.idx}.dat")
         with open(depth_path, 'rb') as fIn:
             # Read the height and width of depth
@@ -189,7 +193,7 @@ class OpenRoomsDataset(data.Dataset):
         depth = self.numpy_images_2_tensor(depth)
 
         # mask
-        mask = (gt_R.mean(dim=0, keepdim=True) > 1e-5).to(torch.float32) * (1.0 - mask_light)
+        mask = (gt_R.mean(dim=0, keepdim=True) > 1e-5).to(torch.float32) #* (1.0 - mask_light)
 
         # data augmentation
         if augment_data:
