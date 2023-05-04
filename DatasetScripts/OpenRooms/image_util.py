@@ -10,6 +10,7 @@ from torchvision.transforms import ToTensor
 import matplotlib.pyplot as plt
 from skimage.restoration import denoise_tv_chambolle
 import cv2
+from kornia.filters import canny
 
 
 def rgb_to_srgb(rgb, gamma=1.0/2.2):
@@ -204,19 +205,24 @@ def generate_histogram_image(array, title, xlabel, ylabel, bins=100, range=None)
 
 
 def numpy_to_tensor(img):
-    if img.ndim == 3:
-        img = np.transpose(img, (2, 0, 1))
+    assert isinstance(img, np.ndarray) and img.dtype == np.float32, \
+        "img should be np.ndarray with dtype np.float32"
+    if img.ndim == 3:  # HWC
+        img = np.transpose(img, (2, 0, 1))  # CHW
+    elif img.ndim == 4:  # BHWC
+        img = np.transpose(img, (0, 3, 1, 2))  # BCHW
     else:
         assert False
     return torch.from_numpy(img).contiguous().to(torch.float32)
 
 
 def tensor_to_numpy(img):
+    assert torch.is_tensor(img), "img should be torch.tensor"
     img = img.cpu().numpy()
-    if img.ndim == 3:
-        img = np.transpose(img, (1, 2, 0))
-    elif img.ndim == 4:
-        img = np.transpose(img, (0, 2, 3, 1))
+    if img.ndim == 3:  # CHW
+        img = np.transpose(img, (1, 2, 0))  # HWC
+    elif img.ndim == 4:  # BCHW
+        img = np.transpose(img, (0, 2, 3, 1))  # BHWC
     else:
         assert False
     return img
@@ -244,22 +250,28 @@ def binary_thresholding(img, blocksize=5, C=2):
     return binarized
 
 
-def canny_edge_detection(img, th1=100, th2=200, denoise=False):
+def denoise_image(img, weight=0.1):
     # Check input shape
-    assert torch.is_tensor(img) and img.ndim == 3, "img should be torch.tensor"
+    assert torch.is_tensor(img) and img.ndim == 3, "img should be torch.tensor [C, H, W]"
+    # Convert to numpy
+    img = tensor_to_numpy(img)  # HWC
+    # Denoise
+    denoised = denoise_tv_chambolle(img, weight=weight, channel_axis=-1)
+    # Convert to tensor
+    denoised = numpy_to_tensor(denoised)  # CHW
+    # display_images([img, denoised], ["input", "denoised"], columns=2)
+    return denoised
 
-    # Convert to uint8 numpy
-    img = img.mean(dim=0).clamp(min=0.0, max=1.0).detach().cpu().numpy()
+
+def canny_edge_detection(img, th1=0.1, th2=0.2, ks=5, denoise=False):
+    # Check input shape
+    assert torch.is_tensor(img) and img.ndim == 3, "img should be torch.tensor [C, H, W]"
+    # Denoise
     if denoise:
-        img = denoise_tv_chambolle(img, weight=0.05)
-    img = img * 255.0
-    img = img.astype(np.uint8)
-
+        img = denoise_image(img, weight=0.1)
     # Edge detection
-    edges = cv2.Canny(img, th1, th2)
-
-    # Convert to torch tensor
-    edges = (torch.from_numpy(edges).contiguous() > 127).to(torch.float32)[None, :, :]
+    magnitude, edges = canny(img.unsqueeze(0), th1, th2, (ks, ks), hysteresis=False)
+    edges = (edges.squeeze(0) > 0.4).to(torch.float32)
     return edges
 
 
@@ -270,3 +282,23 @@ def dilate_mask(mask, k=5):
     mask = torch.nn.functional.conv2d(mask.unsqueeze(0), kernel.unsqueeze(0).unsqueeze(0), padding=k // 2)
     mask = (mask > 0.001).to(torch.float32)
     return mask.squeeze(0)
+
+
+def display_images(_images, titles=None, figsize_base=4, columns=3, show=True):
+    num_images = len(_images)
+    rows = (num_images + columns - 1) // columns
+    figsize = (figsize_base * columns, int(figsize_base * rows * 0.75))
+    fig, axs = plt.subplots(rows, columns, figsize=figsize)
+    axs = axs.ravel()
+    for i, img in enumerate(_images):
+        if torch.is_tensor(img):
+            img = img.numpy().transpose(1, 2, 0)
+        axs[i].imshow(img, cmap="gray")
+        if titles is not None:
+            axs[i].set_title(titles[i])
+    for i in range(len(_images), rows * columns):
+        axs[i].axis('off')
+    if show:
+        plt.show()
+    plt.tight_layout()
+    return plt
