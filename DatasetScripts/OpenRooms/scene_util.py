@@ -60,44 +60,70 @@ def estimate_geometry_edges(depth: torch.tensor, normal: torch.tensor, dilate_ra
     #                           ["depth", "d_edges", "normal", "n_edges", "geo_edges"], columns=5)
     return geo_edges
 
+
 def is_directional_lighting(or_data):
-    assert or_data["gt_S"].ndim == 3, "gt_S should be 3D"
-    # normal edges
-    normal = or_data["normal"]
-    normal = Resize(or_data["gt_S"].shape[1:], InterpolationMode.BILINEAR, antialias=True)(normal)
-    normal = normal / ((normal ** 2).sum(dim=0, keepdim=True) ** 0.5).clamp(min=1e-6)
-    normal_edges = estimate_surface_normal_edges(normal, 3)
-    # dilated mask_light
-    mask_light = or_data["mask_light"][0:1]
-    mask_light = (Resize(or_data["gt_S"].shape[1:], InterpolationMode.BILINEAR, antialias=True)(mask_light) > 0.5).to(torch.float32)
-    mask_light_dilated = dilate_mask(mask_light, 3)
-    # shading edges
+    # Geometry edges
+    depth, normal = or_data["depth"], or_data["normal"]
+    geo_edges = estimate_geometry_edges(depth, normal, 5, True)
+    resize = Resize(geo_edges.shape[1:], InterpolationMode.BILINEAR, antialias=True)
+    # Dilating mask_light
+    mask_light = (or_data["mask_light"][0:1] < 0.6).to(torch.float32)
+    mask_light_dilated = dilate_mask(mask_light, 5)
+    # Final shading edges
     gt_s = or_data["gt_S"]
-    tm_scalar = get_tone_mapping_scalar(gt_s)
-    gt_s = gt_s * tm_scalar
-    gt_s_edges = estimate_shading_edges(gt_s, 3) * (1.0 - normal_edges) * (1.0 - mask_light_dilated)
-    # computed shading edges caused by either lamps or windows
+    gt_s = resize(image_util.denoise_image(gt_s))  # resize and denoise
+    tm_scalar = min(get_tone_mapping_scalar(gt_s), 1.0)  # not scale dark images due to the noise
+    gt_s *= tm_scalar
+    gt_s_edges = estimate_shading_edges(gt_s, 3, denoise=False)
+    gt_s_shadow_edges = gt_s_edges * (1.0 - geo_edges) * (1.0 - mask_light_dilated)
+    # image_util.display_images([gt_s, gt_s_edges, gt_s_shadow_edges,
+    #                            depth, normal, geo_edges,
+    #                            mask_light, mask_light_dilated],
+    #                           titles=["gt_S", "gt_S_edges", "gt_S_shadow_edges",
+    #                                   "depth", "normal", "geo_edges",
+    #                                   "mask_light", "mask_light_dilated"],
+    #                           columns=3)
+
+    # Categorize final shadow edges caused by either lamps or windows
+    assert gt_s_shadow_edges.ndim == 3 and gt_s_shadow_edges.shape[0] == 1, \
+        "gt_s_shadow_edges should only have one channel"
+    lmp_shadow_edges, wdw_shadow_edges = torch.zeros_like(gt_s_shadow_edges), torch.zeros_like(gt_s_shadow_edges)
+    vis, titles = [], []
     lights = or_data["light_sources"]
-    lmp_shadow_edges, wdw_shadow_edges = torch.zeros_like(gt_s), torch.zeros_like(gt_s)
-    vis = []
+    assert len(lights) > 0, "No light sources! Please check the data."
     for i in range(len(lights)):
         l = lights[i]
-        edges_DS = estimate_shading_edges(l.DS * tm_scalar)
-        edges_DSNoOcc = estimate_shading_edges(l.DSNoOcc * get_tone_mapping_scalar(l.DSNoOcc))
-        shadow_edges = edges_DS * gt_s_edges
-        if l.is_window:
+        DS, DSNoOcc = resize(image_util.denoise_image(l.DS)), \
+                      resize(image_util.denoise_image(l.DSNoOcc))
+        DS, DSNoOcc = DS * tm_scalar, \
+                      DSNoOcc * get_tone_mapping_scalar(DSNoOcc)
+        edges_DS = estimate_shading_edges(DS, 0, denoise=False)  # shading edges for the direct lighting
+        edges_DSNoOcc = estimate_shading_edges(DSNoOcc, 3, denoise=False)  # shading edges for the direct lighting without occlusion
+        shading_edges_occ = edges_DS * (1.0 - edges_DSNoOcc)  # shading edges caused by occlusion
+        shadow_edges = edges_DS * (1.0 - edges_DSNoOcc) * gt_s_shadow_edges   # hard shadow edges which contribute to final shaidng edges
+        if l.is_window:  # shadow edges caused by window lighting
             wdw_shadow_edges += shadow_edges
-        else:
+        else:  # shadow edges caused by lamp lighting
             lmp_shadow_edges += shadow_edges
-        vis += [l.DS * tm_scalar, edges_DS,
-                l.DSNoOcc * get_tone_mapping_scalar(l.DSNoOcc), edges_DSNoOcc,
-                shadow_edges]
-    # check if the scene has strong directional lighting
+        # image_util.display_images([DS, edges_DS, DSNoOcc, edges_DSNoOcc, shading_edges_occ, shadow_edges],
+        #                           titles=["DS", "edges_DS", "DSNoOcc", "edges_DSNoOcc", "shading_edges_occ",
+        #                                   "shadow_edges"],
+        #                           columns=6)
+
+    # Check if the scene has strong directional lighting
     lmp_shadow_edges, wdw_shadow_edges = (lmp_shadow_edges > 0.5).to(torch.float32), \
                                          (wdw_shadow_edges > 0.5).to(torch.float32)
-    num_lmp_shadow_pixels = lmp_shadow_edges.sum() / lmp_shadow_edges.shape[0]
-    num_wdw_shadow_pixels = wdw_shadow_edges.sum() / wdw_shadow_edges.shape[0]
-    is_DL = (num_wdw_shadow_pixels > num_lmp_shadow_pixels) and (num_wdw_shadow_pixels > 50)
+    num_lmp_shad, num_wdw_shad = lmp_shadow_edges.sum(), wdw_shadow_edges.sum()
+    is_DL = (num_wdw_shad > num_lmp_shad) and (num_wdw_shad > 100)
+
     # visualization
-    vis += [or_data["srgb_img"], gt_s, mask_light_dilated, gt_s_edges, normal_edges, lmp_shadow_edges, wdw_shadow_edges]
-    return is_DL, vis
+    # image_util.display_images([or_data["srgb_img"], gt_s, normal, depth, mask_light_dilated,
+    #                            gt_s_edges, geo_edges, gt_s_shadow_edges, lmp_shadow_edges, wdw_shadow_edges],
+    #                           titles=["srgb_img", "gt_s", "normal", "depth", "mask_light_dilated",
+    #                                     "gt_s_edges", "geo_edges", "gt_s_shadow_edges", "lmp_shadow_edges", "wdw_shadow_edges"],
+    #                           columns=5)
+    vis += [or_data["srgb_img"], gt_s, normal, depth, mask_light_dilated,
+            gt_s_edges, geo_edges, gt_s_shadow_edges, lmp_shadow_edges, wdw_shadow_edges]
+    titles += [f"srgb_img_{num_lmp_shad}:{num_wdw_shad}_{is_DL}", "gt_s", "normal", "depth", "mask_light_dilated",
+               "gt_s_edges", "geo_edges", "gt_s_shadow_edges", "lmp_shadow_edges", "wdw_shadow_edges"]
+    return is_DL, (vis, titles)
