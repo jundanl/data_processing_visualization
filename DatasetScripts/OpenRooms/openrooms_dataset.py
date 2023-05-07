@@ -48,15 +48,18 @@ class OpenRoomsDataset(data.Dataset):
 
     def __init__(self, root: str,
                  mode: str,
+                 train_val_split: bool,
                  ) -> None:
         assert mode in ["train", "test", "val"]
+        if not train_val_split:  # no val split
+            assert mode in ["train", "test"], "train_val_split=False only supports mode: ['train', 'test']"
         self.mode = mode
         self.is_train = (self.mode in ["train"])
 
         # check dataset path
         self.root = root
         self.data_dirs = {k: os.path.join(self.root, v) for (k, v) in self.data_dirs.items()}
-        self.data_list, self.scene_list = self._get_data_list()
+        self.data_list, self.scene_list = self._get_data_list(train_val_split)
 
     def __len__(self):
         return len(self.data_list)
@@ -64,7 +67,7 @@ class OpenRoomsDataset(data.Dataset):
     def num_of_scenes(self):
         return len(self.scene_list)
 
-    def _get_data_list(self) -> tuple:
+    def _get_data_list(self, train_val_split) -> tuple:
         path = os.path.join(self.root, self.split_files[self.mode])
         flag = self._check_exists([self.root, path] +
                                   [v for (k, v) in self.data_dirs.items()])
@@ -77,10 +80,11 @@ class OpenRoomsDataset(data.Dataset):
         scene_list = [s.strip() for s in scene_list]
         scene_list.sort()
         # train/val split
-        if self.mode == "train":
-            del scene_list[::50]
-        elif self.mode == "val":
-            scene_list = scene_list[::50]
+        if train_val_split:
+            if self.mode == "train":
+                del scene_list[::50]
+            elif self.mode == "val":
+                scene_list = scene_list[::50]
         data_list = []
         for s in scene_list:
             for c in self.categories:
@@ -203,8 +207,10 @@ class OpenRoomsDataset(data.Dataset):
         #                 data_tuple = (F.hflip(d) for d in data_tuple)
         #             hdr_img, srgb_img, rgb_img, gt_R, gt_S, gt_S_direct, mask, mask_light = data_tuple
         gt_R = gt_R * mask
+
+        filename = f"{dp.c}/{dp.s}/{dp.idx}"
         return hdr_img, srgb_img, rgb_img, gt_R, gt_S, gt_S_direct, \
-               mask, mask_light, lights, normal, depth, f"{dp.c}_{dp.s}_{dp.idx}"
+               mask, mask_light, lights, normal, depth, filename
 
     def numpy_images_2_tensor(self, *imgs):
         if len(imgs) == 1:
