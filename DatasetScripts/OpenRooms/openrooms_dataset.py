@@ -49,6 +49,10 @@ class OpenRoomsDataset(data.Dataset):
     def __init__(self, root: str,
                  mode: str,
                  train_val_split: bool,
+                 load_material: bool = True,
+                 load_shading: bool = True,
+                 load_light_sources: bool = True,
+                 load_geometry: bool = True,
                  ) -> None:
         assert mode in ["train", "test", "val"]
         if not train_val_split:  # no val split
@@ -60,6 +64,12 @@ class OpenRoomsDataset(data.Dataset):
         self.root = root
         self.data_dirs = {k: os.path.join(self.root, v) for (k, v) in self.data_dirs.items()}
         self.data_list, self.scene_list = self._get_data_list(train_val_split)
+
+        # loading options
+        self.load_material = load_material
+        self.load_shading = load_shading
+        self.load_light_sources = load_light_sources
+        self.load_geometry = load_geometry
 
     def __len__(self):
         return len(self.data_list)
@@ -125,79 +135,92 @@ class OpenRoomsDataset(data.Dataset):
         rgb_img = hdr_img * tm_scalar
         srgb_img = image_util.rgb_to_srgb(rgb_img).clamp(min=0.0, max=1.0)
         # gt_R
+        if self.load_material:
+            pass
         #         gt_R_path = os.path.join(self.data_dirs["material"], dp.c.replace("mainDiffLight", "main"),
         #                                  dp.s, f"imbaseColor_{dp.idx}.png")
         #         gt_R = cv2.imread(gt_R_path)[:, :, ::-1].astype(np.float32) / 255.0
         #         gt_R = next(self.numpy_images_2_tensor(gt_R)) ** (1.0 / GAMMA)
-        gt_R = torch.ones_like(hdr_img)
+        else:
+            gt_R = None
         # gt_S
-        gt_S_path = os.path.join(self.data_dirs["shading"], dp.c,
-                                 dp.s, f"imshading_{dp.idx}.hdr")
-        gt_S = cv2.imread(gt_S_path, -1)[:, :, ::-1]
-        gt_S = self.numpy_images_2_tensor(gt_S) * tm_scalar
+        if self.load_shading:
+            gt_S_path = os.path.join(self.data_dirs["shading"], dp.c,
+                                     dp.s, f"imshading_{dp.idx}.hdr")
+            gt_S = cv2.imread(gt_S_path, -1)[:, :, ::-1]
+            gt_S = self.numpy_images_2_tensor(gt_S) * tm_scalar
+        else:
+            gt_S = None
         # gt_S_direct
-        gt_S_direct_path = os.path.join(self.data_dirs["shading_direct"], dp.c.replace("mainDiffMat", "main"),
-                                        dp.s, f"imshadingdirect_{dp.idx}.rgbe")
-        gt_S_direct = cv2.imread(gt_S_direct_path, -1)[:, :, ::-1]
-        gt_S_direct = self.numpy_images_2_tensor(gt_S_direct) * tm_scalar
+        # gt_S_direct_path = os.path.join(self.data_dirs["shading_direct"], dp.c.replace("mainDiffMat", "main"),
+        #                                 dp.s, f"imshadingdirect_{dp.idx}.rgbe")
+        # gt_S_direct = cv2.imread(gt_S_direct_path, -1)[:, :, ::-1]
+        # gt_S_direct = self.numpy_images_2_tensor(gt_S_direct) * tm_scalar
         # mask_light
         mask_light_path = os.path.join(self.data_dirs["mask_light"], dp.c.replace("mainDiffMat", "main"),
                                        dp.s, f"immask_{dp.idx}.png")
         mask_light = cv2.imread(mask_light_path)[:, :, ::-1].astype(np.float32) / 255.0
         mask_light = self.numpy_images_2_tensor(mask_light)
-        # mask_light = (self.numpy_images_2_tensor(mask_light) < 0.6).to(torch.float32)
         # light source information
-        lights = []
-        light_frame_dir = os.path.join(self.data_dirs['light_source'],
-                                       dp.c.replace("mainDiffMat", "main"),
-                                       dp.s, f"light_{dp.idx}")
-        num_lights = len(glob.glob(os.path.join(light_frame_dir.replace("mainDiffLight", "main"), 'box*.dat')))
-        assert num_lights > 0, f"Not exists light source information: {light_frame_dir.replace('mainDiffLight', 'main')}"
-        for i in range(num_lights):
-            # is window
-            with open(os.path.join(light_frame_dir.replace('mainDiffLight', 'main'), f"box{i}.dat"), 'rb') as fIn:
-                info = pickle.load(fIn)
-            is_window = info["isWindow"]
-            # light mask
-            l_mask = cv2.imread(os.path.join(light_frame_dir.replace('mainDiffLight', 'main'), f"mask{i}.png"))[:, :, ::-1].astype(np.float32) / 255.0
-            l_mask = self.numpy_images_2_tensor(l_mask)
-            # direct shading without occlusion
-            l_s_direct_wo_occ = cv2.imread(os.path.join(light_frame_dir, f"imDSNoOcclu{i}.rgbe"), -1)[:, :, ::-1]
-            l_s_direct_wo_occ = self.numpy_images_2_tensor(l_s_direct_wo_occ) * tm_scalar
-            # direct shading
-            l_s_direct = cv2.imread(os.path.join(light_frame_dir, f"imDS{i}.rgbe"), -1)[:, :, ::-1]
-            l_s_direct = self.numpy_images_2_tensor(l_s_direct) * tm_scalar
-            #
-            lights.append(LightSource(is_window, l_s_direct, l_s_direct_wo_occ, l_mask))
+        if self.load_light_sources:
+            lights = []
+            light_frame_dir = os.path.join(self.data_dirs['light_source'],
+                                           dp.c.replace("mainDiffMat", "main"),
+                                           dp.s, f"light_{dp.idx}")
+            num_lights = len(glob.glob(os.path.join(light_frame_dir.replace("mainDiffLight", "main"), 'box*.dat')))
+            assert num_lights > 0, f"Not exists light source information: {light_frame_dir.replace('mainDiffLight', 'main')}"
+            for i in range(num_lights):
+                # is window
+                with open(os.path.join(light_frame_dir.replace('mainDiffLight', 'main'), f"box{i}.dat"), 'rb') as fIn:
+                    info = pickle.load(fIn)
+                is_window = info["isWindow"]
+                # light mask
+                l_mask = cv2.imread(os.path.join(light_frame_dir.replace('mainDiffLight', 'main'), f"mask{i}.png"))[:, :, ::-1].astype(np.float32) / 255.0
+                l_mask = self.numpy_images_2_tensor(l_mask)
+                # direct shading without occlusion
+                l_s_direct_wo_occ = cv2.imread(os.path.join(light_frame_dir, f"imDSNoOcclu{i}.rgbe"), -1)[:, :, ::-1]
+                l_s_direct_wo_occ = self.numpy_images_2_tensor(l_s_direct_wo_occ) * tm_scalar
+                # direct shading
+                l_s_direct = cv2.imread(os.path.join(light_frame_dir, f"imDS{i}.rgbe"), -1)[:, :, ::-1]
+                l_s_direct = self.numpy_images_2_tensor(l_s_direct) * tm_scalar
+                #
+                lights.append(LightSource(is_window, l_s_direct, l_s_direct_wo_occ, l_mask))
+        else:
+            lights = None
 
-        # surface normal
-        normal_path = os.path.join(self.data_dirs["geometry"], dp.c.replace("mainDiffLight", "main"), dp.s,
-                                   f"imnormal_{dp.idx}.png")
-        normal = cv2.imread(normal_path)[:, :, ::-1].astype(np.float32) / 127.5 - 1.0
-        normal = self.numpy_images_2_tensor(normal)
-        normal = F.normalize(normal, dim=0, p=2)
+        # load geometry
+        if self.load_geometry:
+            # surface normal
+            normal_path = os.path.join(self.data_dirs["geometry"], dp.c.replace("mainDiffLight", "main"), dp.s,
+                                       f"imnormal_{dp.idx}.png")
+            normal = cv2.imread(normal_path)[:, :, ::-1].astype(np.float32) / 127.5 - 1.0
+            normal = self.numpy_images_2_tensor(normal)
+            normal = F.normalize(normal, dim=0, p=2)
 
-        # depth
-        depth_path = os.path.join(self.data_dirs["geometry"],
-                                  dp.c.replace("mainDiffLight", "main").replace("mainDiffMat", "main"),
-                                  dp.s,
-                                  f"imdepth_{dp.idx}.dat")
-        with open(depth_path, 'rb') as fIn:
-            # Read the height and width of depth
-            hBuffer = fIn.read(4)
-            height = struct.unpack('i', hBuffer)[0]
-            wBuffer = fIn.read(4)
-            width = struct.unpack('i', wBuffer)[0]
-            # Read depth
-            dBuffer = fIn.read(4 * width * height)
-            depth = np.array(
-                struct.unpack('f' * height * width, dBuffer),
-                dtype=np.float32)
-            depth = depth.reshape(height, width, 1)
-        depth = self.numpy_images_2_tensor(depth)
+            # depth
+            depth_path = os.path.join(self.data_dirs["geometry"],
+                                      dp.c.replace("mainDiffLight", "main").replace("mainDiffMat", "main"),
+                                      dp.s,
+                                      f"imdepth_{dp.idx}.dat")
+            with open(depth_path, 'rb') as fIn:
+                # Read the height and width of depth
+                hBuffer = fIn.read(4)
+                height = struct.unpack('i', hBuffer)[0]
+                wBuffer = fIn.read(4)
+                width = struct.unpack('i', wBuffer)[0]
+                # Read depth
+                dBuffer = fIn.read(4 * width * height)
+                depth = np.array(
+                    struct.unpack('f' * height * width, dBuffer),
+                    dtype=np.float32)
+                depth = depth.reshape(height, width, 1)
+            depth = self.numpy_images_2_tensor(depth)
+        else:
+            normal, depth = None, None
 
         # mask
-        mask = (gt_R.mean(dim=0, keepdim=True) > 1e-5).to(torch.float32) #* (1.0 - mask_light)
+        # mask = (gt_R.mean(dim=0, keepdim=True) > 1e-5).to(torch.float32) #* (1.0 - mask_light)
+        mask = torch.ones_like(hdr_img)
 
         # data augmentation
         if augment_data:
@@ -206,10 +229,10 @@ class OpenRoomsDataset(data.Dataset):
         #             if torch.rand(1) < 0.5:
         #                 data_tuple = (F.hflip(d) for d in data_tuple)
         #             hdr_img, srgb_img, rgb_img, gt_R, gt_S, gt_S_direct, mask, mask_light = data_tuple
-        gt_R = gt_R * mask
+        # gt_R = gt_R * mask
 
         filename = f"{dp.c}/{dp.s}/{dp.idx}"
-        return hdr_img, srgb_img, rgb_img, gt_R, gt_S, gt_S_direct, \
+        return hdr_img, srgb_img, rgb_img, gt_R, gt_S, \
                mask, mask_light, lights, normal, depth, filename
 
     def numpy_images_2_tensor(self, *imgs):
@@ -221,14 +244,14 @@ class OpenRoomsDataset(data.Dataset):
         return out
 
     def __getitem__(self, index):
-        hdr_img, srgb_img, rgb_img, gt_R, gt_S, gt_S_direct, \
+        hdr_img, srgb_img, rgb_img, gt_R, gt_S, \
         mask, mask_light, lights, normal, depth, filename = self.load_images(self.data_list[index], self.is_train)
         return {"hdr_img": hdr_img,
                 "srgb_img": srgb_img,
                 "rgb_img": rgb_img,
                 "gt_R": gt_R,
                 "gt_S": gt_S,
-                "gt_S_direct": gt_S_direct,
+                # "gt_S_direct": gt_S_direct,
                 "mask": mask,
                 "mask_light": mask_light,
                 "light_sources": lights,
