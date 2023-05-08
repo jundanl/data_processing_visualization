@@ -37,7 +37,8 @@ class OpenRoomsDataset(data.Dataset):
         "light_source": "LightSource",
         "geometry": "Geometry",
     }
-    split_files = {
+    # original scene split files
+    split_files_original = {
         "train": "split_files/train.txt",
         "val": "split_files/train.txt",
         "test": "split_files/test.txt",
@@ -45,8 +46,14 @@ class OpenRoomsDataset(data.Dataset):
     categories = ["main_xml", "main_xml1",
                   "mainDiffLight_xml", "mainDiffLight_xml1",
                   "mainDiffMat_xml", "mainDiffMat_xml1"]
+    # processed category-scene split files by Jundan
+    split_files_outdoor_lighting = {
+        "train": "split_files/outdoor_lighting_split/train.txt",
+        "test": "split_files/outdoor_lighting_split/test.txt",
+    }
 
     def __init__(self, root: str,
+                 split_type: str,
                  mode: str,
                  train_val_split: bool,
                  load_material: bool = True,
@@ -63,7 +70,7 @@ class OpenRoomsDataset(data.Dataset):
         # check dataset path
         self.root = root
         self.data_dirs = {k: os.path.join(self.root, v) for (k, v) in self.data_dirs.items()}
-        self.data_list, self.scene_list = self._get_data_list(train_val_split)
+        self.data_list, self.scene_list = self._get_data_list(split_type, train_val_split)
 
         # loading options
         self.load_material = load_material
@@ -77,8 +84,13 @@ class OpenRoomsDataset(data.Dataset):
     def num_of_scenes(self):
         return len(self.scene_list)
 
-    def _get_data_list(self, train_val_split) -> tuple:
-        path = os.path.join(self.root, self.split_files[self.mode])
+    def _get_data_list(self, split_type, train_val_split) -> tuple:
+        dict_split_files = {
+            "original": self.split_files_original,
+            "outdoor_lighting": self.split_files_outdoor_lighting,
+        }
+        assert split_type in dict_split_files.keys(), f"split_type must be one of {dict_split_files.keys()}"
+        path = os.path.join(self.root, dict_split_files[split_type][self.mode])
         flag = self._check_exists([self.root, path] +
                                   [v for (k, v) in self.data_dirs.items()])
         if not flag:
@@ -86,8 +98,17 @@ class OpenRoomsDataset(data.Dataset):
                                f"in the path: {self.root}")
         # load list
         with open(path) as f:
-            scene_list = f.readlines()
-        scene_list = [s.strip() for s in scene_list]
+            scene_names = f.readlines()
+        scene_names = [s.strip() for s in scene_names]
+        if split_type == "outdoor_lighting":
+            scene_list = scene_names
+        elif split_type == "original":
+            scene_list = []
+            for c in self.categories:
+                for s in scene_names:
+                    scene_list.append(f"{c}/{s}")
+        else:
+            raise ValueError(f"split_type must be one of {dict_split_files.keys()}")
         scene_list.sort()
         # train/val split
         if train_val_split:
@@ -96,24 +117,23 @@ class OpenRoomsDataset(data.Dataset):
             elif self.mode == "val":
                 scene_list = scene_list[::50]
         data_list = []
-        for s in scene_list:
-            for c in self.categories:
-                image_scene_path = os.path.join(self.data_dirs["images"], c, s)
-                if not os.path.exists(image_scene_path):
-                    print(f"Not exists image path: {image_scene_path}")
-                    continue
-                else:
-                    pass
-                #                     material_scene_path = os.path.join(self.material_dir, c.replace("mainDiffLight", "main"), s)
-                #                     if not os.path.exists(material_scene_path):
-                #                         print(f"Not exists material path: {material_scene_path}")
-                #                         continue
-                file_list = os.listdir(image_scene_path)
-                file_list.sort()
-                for f in file_list:
-                    idx = f[len("im_"):-len(".hdr")]
-                    assert f == f"im_{idx}.hdr", f"{f}, {f'im_{idx}.hdr'}"
-                    data_list.append(DataPath(c, s, idx))
+        for cs in scene_list:
+            image_scene_path = os.path.join(self.data_dirs["images"], cs)
+            if not os.path.exists(image_scene_path):
+                print(f"Not exists image path: {image_scene_path}")
+                continue
+            #                     material_scene_path = os.path.join(self.material_dir, c.replace("mainDiffLight", "main"), s)
+            #                     if not os.path.exists(material_scene_path):
+            #                         print(f"Not exists material path: {material_scene_path}")
+            #                         continue
+            file_list = os.listdir(image_scene_path)
+            assert len(file_list) > 0, f"Empty scene: {image_scene_path}"
+            file_list.sort()
+            for f in file_list:
+                idx = f[len("im_"):-len(".hdr")]
+                assert f == f"im_{idx}.hdr", f"{f}, {f'im_{idx}.hdr'}"
+                c, s = cs.split("/")
+                data_list.append(DataPath(c, s, idx))
         return data_list, scene_list
 
     def _check_exists(self, paths) -> bool:

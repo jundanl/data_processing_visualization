@@ -38,18 +38,17 @@ def process_outdoor_lighting(args):
 def find_outdoor_lighting_scene(or_dataset_path, split, out_dir, nthread):
     assert split in ["train", "test"], f"split {split} not supported"
     print(f"OpenRooms ({split}) dataset path:", or_dataset_path)
-    dataset = OpenRoomsDataset(or_dataset_path, split, False,
+    dataset = OpenRoomsDataset(or_dataset_path, "original", split, False,
                                load_material=False, load_shading=False,
                                load_light_sources=False, load_geometry=False,)
-    print(f"    number of scenes: {len(dataset.scene_list)}, number of images: {len(dataset)}")
+    print(f"    number of scenes: {dataset.num_of_scenes()}, number of images: {len(dataset)}")
 
     print(f"Finding outdoor lighting scenes with {nthread} threads...")
     # create a manager to share the scene_outdoor_lighting dictionary
     manager = Manager()
     is_outdoor_lighting = manager.dict()
-    for scene in dataset.scene_list:
-        for c in dataset.categories:
-            is_outdoor_lighting[f"{c}/{scene}"] = False  # initialize as False
+    for cs in dataset.scene_list:
+        is_outdoor_lighting[cs] = False  # initialize as False
     # process the dataset
     lock = manager.Lock()
     with Pool(processes=nthread) as pool:
@@ -69,7 +68,7 @@ def find_outdoor_lighting_scene(or_dataset_path, split, out_dir, nthread):
                 f.write(f"{s}\n")
                 cnt += 1
     print(f"Done! Saved to {save_path}.")
-    print(f"Found {cnt} of {len(dataset.scene_list) * len(dataset.categories)} category-scenes with outdoor lighting.")
+    print(f"Found {cnt} of {dataset.num_of_scenes()} scenes with outdoor lighting.")
 
 
 if __name__ == '__main__':
