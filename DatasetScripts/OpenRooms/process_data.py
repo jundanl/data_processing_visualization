@@ -8,6 +8,29 @@ import scene_util, image_util
 from openrooms_dataset import OpenRoomsDataset
 
 
+def process_strong_directional_lighting(args):
+    # unpack the arguments
+    i, dataset, list_dl, visual_pos_dir, visual_neg_dir, lock = args
+    # get the data
+    or_data = dataset[i]
+    img_name = or_data["img_name"]
+    # check if the image has directional lighting
+    is_dl, (vis, titles) = scene_util.is_directional_lighting(or_data)
+    if is_dl:  # positive samples
+        with lock:
+            list_dl.append(img_name)
+        save_path = os.path.join(visual_pos_dir, f"{img_name.replace('/', '_')}.jpeg")
+        code = 0
+    else:  # negative samples
+        save_path = os.path.join(visual_neg_dir, f"{img_name.replace('/', '_')}.jpeg")
+        code = 1
+    # visualization
+    plt = image_util.display_images(vis, titles=titles, columns=5, show=False)
+    plt.savefig(save_path)
+    plt.close()
+    return code
+
+
 def process_outdoor_lighting(args):
     # unpack the arguments
     i, dataset, is_outdoor_lighting, lock = args
@@ -35,7 +58,7 @@ def process_outdoor_lighting(args):
     return 1
 
 
-def find_outdoor_lighting_scene(or_dataset_path, split, out_dir, nthread):
+def find_outdoor_lighting_scenes(or_dataset_path, split, out_dir, nthread):
     assert split in ["train", "test"], f"split {split} not supported"
     print(f"OpenRooms ({split}) dataset path:", or_dataset_path)
     dataset = OpenRoomsDataset(or_dataset_path, "original", split, False,
@@ -71,12 +94,50 @@ def find_outdoor_lighting_scene(or_dataset_path, split, out_dir, nthread):
     print(f"Found {cnt} of {dataset.num_of_scenes()} scenes with outdoor lighting.")
 
 
+def find_strong_directional_lighting_scenes(or_dataset_path, split, out_dir, nthread):
+    # create the output directory
+    out_dir = os.path.join(out_dir, f"strong_directional_lighting_{split}")
+    visual_pos_dir = os.path.join(out_dir, "pos")
+    visual_neg_dir = os.path.join(out_dir, "neg")
+    split_file_dir = os.path.join(out_dir, "strong_directional_lighting_split_files")
+    for p in [out_dir, visual_pos_dir, visual_neg_dir, split_file_dir]:
+        if not os.path.exists(p):
+            os.makedirs(p)
+    # create the dataset
+    assert split in ["train", "test"], f"split {split} not supported"
+    print(f"OpenRooms ({split}) dataset path:", or_dataset_path)
+    dataset = OpenRoomsDataset(or_dataset_path, "outdoor_lighting", split, False,
+                               load_material=False, load_shading=True,
+                               load_light_sources=True, load_geometry=True,)
+    print(f"    number of scenes: {dataset.num_of_scenes()}, number of images: {len(dataset)}")
+
+    print(f"Finding strong directional lighting scenes with {nthread} threads...")
+    # create a manager to share the list_DL list
+    manager = Manager()
+    list_dl = manager.list()
+    # process the dataset
+    lock = manager.Lock()
+    with Pool(processes=nthread) as pool:
+        for i, code in enumerate(pool.imap_unordered(process_strong_directional_lighting,
+                                                     [(i, dataset, list_dl, visual_pos_dir, visual_neg_dir, lock) for i in range(len(dataset))])):
+            if i % 200 == 0:
+                print(f"Processed the {i}th image: {code}. \n"
+                      f"    Found {len(list_dl)} images with strong directional lighting.")
+    # save the list of scenes with strong directional lighting
+    save_path = os.path.join(split_file_dir, f"{split}.txt")
+    with open(save_path, "w") as f:
+        for item in list_dl:
+            f.write("%s\n" % item)
+    print(f"Done! Saved to {save_path}.")
+    print(f"Found {len(list_dl)} of {len(dataset)} images with strong directional lighting.")
+
+
 if __name__ == '__main__':
     # create an argument parser
     parser = argparse.ArgumentParser()
 
     # add arguments
-    parser.add_argument("--func", default="outdoor_lighting", help="function to execute")
+    parser.add_argument("--func", default="strong_directional", help="function to execute")
     parser.add_argument("--or_dataset_path", default="./data/OpenRooms", help="path to OpenRooms dataset")
     parser.add_argument("--split", default="test", help="split of the dataset")
     parser.add_argument("--out_dir", default="./out", help="output directory")
@@ -87,7 +148,8 @@ if __name__ == '__main__':
 
     # assign the arguments to variables
     func = {
-        "outdoor_lighting": find_outdoor_lighting_scene,
+        "outdoor_lighting": find_outdoor_lighting_scenes,
+        "strong_directional": find_strong_directional_lighting_scenes,
     }[args.func]
     print("Output directory:", args.out_dir)
     if not os.path.exists(args.out_dir):

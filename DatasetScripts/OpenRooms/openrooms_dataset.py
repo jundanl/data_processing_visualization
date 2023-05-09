@@ -48,8 +48,8 @@ class OpenRoomsDataset(data.Dataset):
                   "mainDiffMat_xml", "mainDiffMat_xml1"]
     # processed category-scene split files by Jundan
     split_files_outdoor_lighting = {
-        "train": "split_files/outdoor_lighting_split/train.txt",
-        "test": "split_files/outdoor_lighting_split/test.txt",
+        "train": "split_files/outdoor_lighting_split_files_V0/train.txt",
+        "test": "split_files/outdoor_lighting_split_files_V0/test.txt",
     }
 
     def __init__(self, root: str,
