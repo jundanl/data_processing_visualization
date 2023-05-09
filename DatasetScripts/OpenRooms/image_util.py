@@ -293,6 +293,10 @@ def display_images(_images, titles=None, figsize_base=4, columns=3, show=True):
     for i, img in enumerate(_images):
         if torch.is_tensor(img):
             img = img.numpy().transpose(1, 2, 0)
+        if img.dtype == np.float32:
+            img = img.clip(min=0.0, max=1.0)
+        elif img.dtype == np.uint8:
+            img = img.clip(min=0, max=255)
         axs[i].imshow(img, cmap="gray")
         if titles is not None:
             axs[i].set_title(titles[i])
