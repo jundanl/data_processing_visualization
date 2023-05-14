@@ -58,7 +58,7 @@ class OpenRoomsDataset(data.Dataset):
     }
 
     def __init__(self, root: str,
-                 split_type: str,
+                 split_type: str,  # original, outdoor_lighting, strong_directional_lighting
                  mode: str,
                  train_val_split: bool,
                  load_material: bool = True,

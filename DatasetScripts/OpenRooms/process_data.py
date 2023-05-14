@@ -1,5 +1,6 @@
 import os
 import argparse
+import random
 
 import torchvision
 from multiprocessing import Pool, Manager
@@ -10,25 +11,22 @@ from openrooms_dataset import OpenRoomsDataset
 
 def process_strong_directional_lighting(args):
     # unpack the arguments
-    i, dataset, list_dl, visual_pos_dir, visual_neg_dir, lock = args
+    i, dataset, visual_pos_dir, visual_neg_dir, vis_ratio = args
     # get the data
     or_data = dataset[i]
     img_name = or_data["img_name"]
     # check if the image has directional lighting
     is_dl, (vis, titles) = scene_util.is_directional_lighting(or_data)
     if is_dl:  # positive samples
-        with lock:
-            list_dl.append(img_name)
         save_path = os.path.join(visual_pos_dir, f"{img_name.replace('/', '_')}.jpeg")
-        code = 0
     else:  # negative samples
         save_path = os.path.join(visual_neg_dir, f"{img_name.replace('/', '_')}.jpeg")
-        code = 1
     # visualization
-    plt = image_util.display_images(vis, titles=titles, columns=5, show=False)
-    plt.savefig(save_path)
-    plt.close()
-    return code
+    if random.random() < vis_ratio:
+        plt = image_util.display_images(vis, titles=titles, columns=5, show=False)
+        plt.savefig(save_path)
+        plt.close()
+    return i, is_dl, img_name
 
 
 def process_outdoor_lighting(args):
@@ -58,7 +56,7 @@ def process_outdoor_lighting(args):
     return 1
 
 
-def find_outdoor_lighting_scenes(or_dataset_path, split, out_dir, nthread):
+def find_outdoor_lighting_scenes(or_dataset_path, split, out_dir, nthread, *args):
     assert split in ["train", "test"], f"split {split} not supported"
     print(f"OpenRooms ({split}) dataset path:", or_dataset_path)
     dataset = OpenRoomsDataset(or_dataset_path, "original", split, False,
@@ -94,9 +92,9 @@ def find_outdoor_lighting_scenes(or_dataset_path, split, out_dir, nthread):
     print(f"Found {cnt} of {dataset.num_of_scenes()} scenes with outdoor lighting.")
 
 
-def find_strong_directional_lighting_scenes(or_dataset_path, split, out_dir, nthread):
+def find_strong_directional_lighting_scenes(or_dataset_path, split, out_dir, nthread, start_idx=0):
     # create the output directory
-    out_dir = os.path.join(out_dir, f"strong_directional_lighting_{split}")
+    out_dir = os.path.join(out_dir, f"strong_directional_lighting_V1/{split}")
     visual_pos_dir = os.path.join(out_dir, "pos")
     visual_neg_dir = os.path.join(out_dir, "neg")
     split_file_dir = os.path.join(out_dir, "strong_directional_lighting_split_files")
@@ -112,24 +110,26 @@ def find_strong_directional_lighting_scenes(or_dataset_path, split, out_dir, nth
     print(f"    number of scenes: {dataset.num_of_scenes()}, number of images: {len(dataset)}")
 
     print(f"Finding strong directional lighting scenes with {nthread} threads...")
-    # create a manager to share the list_DL list
-    manager = Manager()
-    list_dl = manager.list()
     # process the dataset
-    lock = manager.Lock()
+    file_path = os.path.join(split_file_dir, f"{split}.txt")
+    f = open(file_path, "a")
+    cnt = 0
+    interval = 5
     with Pool(processes=nthread) as pool:
-        for i, code in enumerate(pool.imap_unordered(process_strong_directional_lighting,
-                                                     [(i, dataset, list_dl, visual_pos_dir, visual_neg_dir, lock) for i in range(len(dataset))])):
-            if i % 200 == 0:
-                print(f"Processed the {i}th image: {code}. \n"
-                      f"    Found {len(list_dl)} images with strong directional lighting.")
-    # save the list of scenes with strong directional lighting
-    save_path = os.path.join(split_file_dir, f"{split}.txt")
-    with open(save_path, "w") as f:
-        for item in list_dl:
-            f.write("%s\n" % item)
-    print(f"Done! Saved to {save_path}.")
-    print(f"Found {len(list_dl)} of {len(dataset)} images with strong directional lighting.")
+        for i, (idx, is_dl, img_name) in enumerate(
+                pool.imap_unordered(process_strong_directional_lighting,
+                                    [(idx, dataset, visual_pos_dir, visual_neg_dir, 0.1)
+                                     for idx in range(start_idx, len(dataset))])):
+            if is_dl:
+                cnt += 1
+                f.write(f"{img_name}\n")
+            if i % interval == 0:
+                print(f"Processed {i+1}/{len(dataset)-start_idx} images.\n"
+                      f"    Found {cnt} images with strong directional lighting.")
+
+    f.close()
+    print(f"Done! Saved to {file_path}.")
+    print(f"Found {cnt} of {len(dataset)-start_idx} images with strong directional lighting.")
 
 
 def show_dataset_size(or_dataset_path, *args):
@@ -159,7 +159,8 @@ if __name__ == '__main__':
     parser.add_argument("--or_dataset_path", default="./data/OpenRooms", help="path to OpenRooms dataset")
     parser.add_argument("--split", default="test", help="split of the dataset")
     parser.add_argument("--out_dir", default="./out", help="output directory")
-    parser.add_argument("--nthread", default=8, help="number of threads")
+    parser.add_argument("--nthread", default=4, help="number of threads")
+    parser.add_argument("--start_idx", default=0, help="start index of the dataset")
 
     # parse the arguments
     args = parser.parse_args()
@@ -175,4 +176,5 @@ if __name__ == '__main__':
         os.makedirs(args.out_dir)
     print("")
 
-    func(args.or_dataset_path, args.split, args.out_dir, int(args.nthread))
+    func(args.or_dataset_path, args.split, args.out_dir,
+         int(args.nthread), int(args.start_idx))
