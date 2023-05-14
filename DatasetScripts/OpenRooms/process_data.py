@@ -1,7 +1,9 @@
 import os
 import argparse
 import random
+import time
 
+import torch
 import torchvision
 from multiprocessing import Pool, Manager
 
@@ -114,7 +116,8 @@ def find_strong_directional_lighting_scenes(or_dataset_path, split, out_dir, nth
     file_path = os.path.join(split_file_dir, f"{split}.txt")
     f = open(file_path, "a")
     cnt = 0
-    interval = 5
+    interval = 50
+    end = time.time()
     with Pool(processes=nthread) as pool:
         for i, (idx, is_dl, img_name) in enumerate(
                 pool.imap_unordered(process_strong_directional_lighting,
@@ -123,9 +126,11 @@ def find_strong_directional_lighting_scenes(or_dataset_path, split, out_dir, nth
             if is_dl:
                 cnt += 1
                 f.write(f"{img_name}\n")
-            if i % interval == 0:
+            if (i + 1) % interval == 0:
                 print(f"Processed {i+1}/{len(dataset)-start_idx} images.\n"
-                      f"    Found {cnt} images with strong directional lighting.")
+                      f"    Found {cnt} images with strong directional lighting."
+                      f"    Time elapsed: {(time.time()-end)/interval:.2f} seconds/image.")
+                end = time.time()
 
     f.close()
     print(f"Done! Saved to {file_path}.")
@@ -151,6 +156,9 @@ def show_dataset_size(or_dataset_path, *args):
 
 
 if __name__ == '__main__':
+    # set the number of threads to 1 to let multiprocessing work properly
+    torch.set_num_threads(1)
+
     # create an argument parser
     parser = argparse.ArgumentParser()
 
