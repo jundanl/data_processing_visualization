@@ -132,6 +132,24 @@ def find_strong_directional_lighting_scenes(or_dataset_path, split, out_dir, nth
     print(f"Found {len(list_dl)} of {len(dataset)} images with strong directional lighting.")
 
 
+def show_dataset_size(or_dataset_path, *args):
+    print(f"OpenRooms dataset path:", or_dataset_path)
+    for split_type in ["original", "outdoor_lighting", "strong_directional_lighting"]:
+        print(f"\nChecking {split_type} split files...")
+        num_scenes, num_imgs = 0, 0
+        for split in ["test", "train"]:
+            dataset = OpenRoomsDataset(or_dataset_path, split_type, split, False,
+                                       load_material=False, load_shading=False,
+                                       load_light_sources=False, load_geometry=False,)
+            print(f"    number of {split} scenes: {dataset.num_of_scenes()}, "
+                  f"number of {split} images: {len(dataset)}")
+            num_scenes += dataset.num_of_scenes()
+            num_imgs += len(dataset)
+        print(f"    total number of scenes: {num_scenes}, "
+              f"total number of images: {num_imgs}")
+    print("\nDone!")
+
+
 if __name__ == '__main__':
     # create an argument parser
     parser = argparse.ArgumentParser()
@@ -150,6 +168,7 @@ if __name__ == '__main__':
     func = {
         "outdoor_lighting": find_outdoor_lighting_scenes,
         "strong_directional": find_strong_directional_lighting_scenes,
+        "show_size": show_dataset_size,
     }[args.func]
     print("Output directory:", args.out_dir)
     if not os.path.exists(args.out_dir):

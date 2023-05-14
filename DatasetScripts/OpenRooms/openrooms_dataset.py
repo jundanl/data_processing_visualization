@@ -51,6 +51,11 @@ class OpenRoomsDataset(data.Dataset):
         "train": "split_files/outdoor_lighting_split_files_V0/train.txt",
         "test": "split_files/outdoor_lighting_split_files_V0/test.txt",
     }
+    # processed category-scene-id split files by Jundan
+    split_files_strong_directional_lighting = {
+        "train": "split_files/strong_directional_lighting_split_files_V0/train.txt",
+        "test": "split_files/strong_directional_lighting_split_files_V0/test.txt",
+    }
 
     def __init__(self, root: str,
                  split_type: str,
@@ -86,8 +91,9 @@ class OpenRoomsDataset(data.Dataset):
 
     def _get_data_list(self, split_type, train_val_split) -> tuple:
         dict_split_files = {
-            "original": self.split_files_original,
-            "outdoor_lighting": self.split_files_outdoor_lighting,
+            "original": self.split_files_original,  # path: scene
+            "outdoor_lighting": self.split_files_outdoor_lighting,  # path: category/scene
+            "strong_directional_lighting": self.split_files_strong_directional_lighting,  # path: category/scene/id
         }
         assert split_type in dict_split_files.keys(), f"split_type must be one of {dict_split_files.keys()}"
         path = os.path.join(self.root, dict_split_files[split_type][self.mode])
@@ -96,16 +102,17 @@ class OpenRoomsDataset(data.Dataset):
         if not flag:
             raise RuntimeError(f"OpenRooms dataset is not found or not complete "
                                f"in the path: {self.root}")
-        # load list
+        # load split file
         with open(path) as f:
-            scene_names = f.readlines()
-        scene_names = [s.strip() for s in scene_names]
-        if split_type == "outdoor_lighting":
-            scene_list = scene_names
+            paths = f.readlines()
+        paths = [s.strip() for s in paths]
+        # scene list: "category/scene" or "category/scene/id"
+        if split_type in ["outdoor_lighting", "strong_directional_lighting"]:
+            scene_list = paths
         elif split_type == "original":
             scene_list = []
             for c in self.categories:
-                for s in scene_names:
+                for s in paths:
                     scene_list.append(f"{c}/{s}")
         else:
             raise ValueError(f"split_type must be one of {dict_split_files.keys()}")
@@ -116,24 +123,28 @@ class OpenRoomsDataset(data.Dataset):
                 del scene_list[::50]
             elif self.mode == "val":
                 scene_list = scene_list[::50]
+        # data list: "category/scene/id"
         data_list = []
-        for cs in scene_list:
-            image_scene_path = os.path.join(self.data_dirs["images"], cs)
-            if not os.path.exists(image_scene_path):
-                print(f"Not exists image path: {image_scene_path}")
-                continue
-            #                     material_scene_path = os.path.join(self.material_dir, c.replace("mainDiffLight", "main"), s)
-            #                     if not os.path.exists(material_scene_path):
-            #                         print(f"Not exists material path: {material_scene_path}")
-            #                         continue
-            file_list = os.listdir(image_scene_path)
-            assert len(file_list) > 0, f"Empty scene: {image_scene_path}"
-            file_list.sort()
-            for f in file_list:
-                idx = f[len("im_"):-len(".hdr")]
-                assert f == f"im_{idx}.hdr", f"{f}, {f'im_{idx}.hdr'}"
-                c, s = cs.split("/")
-                data_list.append(DataPath(c, s, idx))
+        if split_type in ["original", "outdoor_lighting"]:
+            for cs in scene_list:
+                image_scene_path = os.path.join(self.data_dirs["images"], cs)
+                if not os.path.exists(image_scene_path):
+                    print(f"Not exists image path: {image_scene_path}")
+                    continue
+                file_list = os.listdir(image_scene_path)
+                assert len(file_list) > 0, f"Empty scene: {image_scene_path}"
+                file_list.sort()
+                for f in file_list:
+                    idx = f[len("im_"):-len(".hdr")]
+                    assert f == f"im_{idx}.hdr", f"{f}, {f'im_{idx}.hdr'}"
+                    c, s = cs.split("/")
+                    data_list.append(DataPath(c, s, idx))
+        elif split_type == "strong_directional_lighting":
+            for csi in scene_list:
+                c, s, i = csi.split("/")
+                data_list.append(DataPath(c, s, i))
+        else:
+            raise ValueError(f"split_type must be one of {dict_split_files.keys()}")
         return data_list, scene_list
 
     def _check_exists(self, paths) -> bool:
