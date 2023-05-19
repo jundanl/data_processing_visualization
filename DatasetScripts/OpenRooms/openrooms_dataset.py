@@ -307,6 +307,28 @@ class OpenRoomsDataset(data.Dataset):
                 "dataset": "OpenRooms"}
 
 
+def transform_SG_to_camera_system(sg_cart_coords: torch.tensor, normal: torch.tensor):
+    # Check the shape of env_sgs and normal
+    assert sg_cart_coords.ndim == 4 and sg_cart_coords.shape[1] == 3, \
+        f"sg_cart_coords should be in shape (numSGs, 3, height, width), but got {sg_cart_coords.shape}"
+    assert normal.ndim == 3 and normal.shape[0] == 3, \
+        f"normal should be in shape (3, height, width), but got {normal.shape}"
+
+    # Transform SGs to camera system.
+    # Modified from: https://github.com/lzqsd/InverseRenderingOfIndoorScene/blob/master/models.py
+    device = sg_cart_coords.device
+    normal = normal / torch.linalg.norm(normal, ord=2, dim=0, keepdim=True).clamp(min=1e-6)
+    up = torch.tensor([0, 1, 0], dtype=torch.float32, device=device, requires_grad=False)
+    normal = normal.unsqueeze(0)  # (1, 3, height, width)
+    camyProj = torch.einsum('b,abcd->acd', (up, normal)).unsqueeze(1).expand_as(normal) * normal  # (1, 3, height, width)
+    camy = F.normalize(up.unsqueeze(0).unsqueeze(-1).unsqueeze(-1).expand_as(camyProj) - camyProj, dim=1) # (1, 3, height, width)
+    camx = -F.normalize(torch.cross(camy, normal, dim=1), dim=1)  # (1, 3, height, width)
+    cam_view_sg = sg_cart_coords[:, 0:1, :, :] * camx + \
+                  sg_cart_coords[:, 1:2, :, :] * camy + \
+                  sg_cart_coords[:, 2:3, :, :] * normal
+    return cam_view_sg
+
+
 def check_dataset_split(dataset_openrooms, batch_size, num_workers, disp_iters, visualize_dir=None) -> None:
     if visualize_dir is not None:
         if not os.path.exists(visualize_dir):
