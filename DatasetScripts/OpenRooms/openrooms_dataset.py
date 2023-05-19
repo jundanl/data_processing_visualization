@@ -16,6 +16,7 @@ import numpy as np
 # from torchvision.transforms import functional as F
 # from PIL import Image
 import cv2
+import h5py
 
 import image_util
 
@@ -35,6 +36,7 @@ class OpenRoomsDataset(data.Dataset):
         "shading_direct": "ShadingDirect",
         "mask_light": "Mask",
         "light_source": "LightSource",
+        "SG_env": "SVSG",
         "geometry": "Geometry",
     }
     # original scene split files
@@ -53,18 +55,19 @@ class OpenRoomsDataset(data.Dataset):
     }
     # processed category-scene-id split files by Jundan
     split_files_strong_directional_lighting = {
-        "train": "split_files/strong_directional_lighting_split_files_V0/train.txt",
-        "test": "split_files/strong_directional_lighting_split_files_V0/test.txt",
+        "train": "split_files/strong_directional_lighting_split_files_V1/train.txt",
+        "test": "split_files/strong_directional_lighting_split_files_V1/test.txt",
     }
 
     def __init__(self, root: str,
                  split_type: str,  # original, outdoor_lighting, strong_directional_lighting
                  mode: str,
                  train_val_split: bool,
-                 load_material: bool = True,
-                 load_shading: bool = True,
-                 load_light_sources: bool = True,
-                 load_geometry: bool = True,
+                 load_material: bool = False,
+                 load_shading: bool = False,
+                 load_light_sources: bool = False,
+                 load_light_env: bool = False,
+                 load_geometry: bool = False,
                  ) -> None:
         assert mode in ["train", "test", "val"]
         if not train_val_split:  # no val split
@@ -81,6 +84,7 @@ class OpenRoomsDataset(data.Dataset):
         self.load_material = load_material
         self.load_shading = load_shading
         self.load_light_sources = load_light_sources
+        self.load_light_env = load_light_env
         self.load_geometry = load_geometry
 
     def __len__(self):
@@ -165,7 +169,7 @@ class OpenRoomsDataset(data.Dataset):
         tm_scalar = image_util.get_tone_mapping_scalar(hdr_img)
         rgb_img = hdr_img * tm_scalar
         srgb_img = image_util.rgb_to_srgb(rgb_img).clamp(min=0.0, max=1.0)
-        # gt_R
+        # load material
         if self.load_material:
             pass
         #         gt_R_path = os.path.join(self.data_dirs["material"], dp.c.replace("mainDiffLight", "main"),
@@ -174,7 +178,7 @@ class OpenRoomsDataset(data.Dataset):
         #         gt_R = next(self.numpy_images_2_tensor(gt_R)) ** (1.0 / GAMMA)
         else:
             gt_R = None
-        # gt_S
+        # load shading
         if self.load_shading:
             gt_S_path = os.path.join(self.data_dirs["shading"], dp.c,
                                      dp.s, f"imshading_{dp.idx}.hdr")
@@ -192,7 +196,7 @@ class OpenRoomsDataset(data.Dataset):
                                        dp.s, f"immask_{dp.idx}.png")
         mask_light = cv2.imread(mask_light_path)[:, :, ::-1].astype(np.float32) / 255.0
         mask_light = self.numpy_images_2_tensor(mask_light)
-        # light source information
+        # load light source
         if self.load_light_sources:
             lights = []
             light_frame_dir = os.path.join(self.data_dirs['light_source'],
@@ -218,7 +222,16 @@ class OpenRoomsDataset(data.Dataset):
                 lights.append(LightSource(is_window, l_s_direct, l_s_direct_wo_occ, l_mask))
         else:
             lights = None
-
+        # load light environmental maps
+        if self.load_light_env:
+            hf = h5py.File(os.path.join(self.data_dirs["SG_env"], dp.c, dp.s,
+                                        f"imsgEnv_{dp.idx}.h5"), 'r')
+            envSGs = np.array(hf.get('data'))  # 120 X 160 X 12 X 6
+            hf.close()
+            envSGs = np.transpose(envSGs, (2, 3, 0, 1))  # 12 X 6 X 120 X 160
+            envSGs = torch.from_numpy(envSGs).contiguous().to(torch.float32)
+        else:
+            envSGs = None
         # load geometry
         if self.load_geometry:
             # surface normal
@@ -264,7 +277,7 @@ class OpenRoomsDataset(data.Dataset):
 
         filename = f"{dp.c}/{dp.s}/{dp.idx}"
         return hdr_img, srgb_img, rgb_img, gt_R, gt_S, \
-               mask, mask_light, lights, normal, depth, filename
+               mask, mask_light, lights, envSGs, normal, depth, filename
 
     def numpy_images_2_tensor(self, *imgs):
         if len(imgs) == 1:
@@ -276,7 +289,7 @@ class OpenRoomsDataset(data.Dataset):
 
     def __getitem__(self, index):
         hdr_img, srgb_img, rgb_img, gt_R, gt_S, \
-        mask, mask_light, lights, normal, depth, filename = self.load_images(self.data_list[index], self.is_train)
+        mask, mask_light, lights, envSGs, normal, depth, filename = self.load_images(self.data_list[index], self.is_train)
         return {"hdr_img": hdr_img,
                 "srgb_img": srgb_img,
                 "rgb_img": rgb_img,
@@ -286,6 +299,7 @@ class OpenRoomsDataset(data.Dataset):
                 "mask": mask,
                 "mask_light": mask_light,
                 "light_sources": lights,
+                "SG_env": envSGs,
                 "normal": normal,
                 "depth": depth,
                 "index": index,

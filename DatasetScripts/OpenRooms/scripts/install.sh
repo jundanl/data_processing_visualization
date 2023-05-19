@@ -5,3 +5,4 @@ pip install matplotlib
 conda install scipy scikit-image numpy
 pip install kornia
 pip install kornia[x]
+conda install h5py
