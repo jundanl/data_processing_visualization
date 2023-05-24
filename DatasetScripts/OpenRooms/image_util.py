@@ -306,3 +306,20 @@ def display_images(_images, titles=None, figsize_base=4, columns=3, show=True):
         plt.show()
     plt.tight_layout()
     return plt
+
+
+def draw_a_circle(img: torch.tensor, center: tuple, radius: int, color: tuple, thickness: int):
+    # Check input shape
+    assert torch.is_tensor(img) and img.ndim == 3, "img should be torch.tensor [C, H, W]"
+    assert img.shape[0] == 3 or img.shape[0] == 1, "img should be RGB or gray-scale"
+    # Convert to numpy
+    if img.shape[0] == 1:
+        img = img.repeat(3, 1, 1)
+    img = tensor_to_numpy(img).copy()  # HWC
+    # Draw a circle
+    img_circle = cv2.circle(img, center, radius, color, thickness).astype(np.float32)
+    # Convert to tensor
+    img_circle = numpy_to_tensor(img_circle)  # CHW
+    # display_images([img, img_circle], ["input", "circle"], columns=2, show=True)
+    return img_circle
+

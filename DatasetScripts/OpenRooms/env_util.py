@@ -51,7 +51,7 @@ def estimate_pw_dominant_lighting_direction(or_data, coord_transform=None, visua
     mask_light = (or_data["mask_light"][0:1] < 0.6).to(torch.float32)
     resize = torchvision.transforms.Resize(pw_sgs.shape[2:4], antialias=True)
     mask_light = resize(mask_light)
-    mask_light = (mask_light > 0.1).to(torch.float32)
+    mask_light = (mask_light > 0.01).to(torch.float32)
 
     # Spherical gaussian parameters
     sg_cart_mean, lamb, weight = \
@@ -81,11 +81,31 @@ def estimate_pw_dominant_lighting_direction(or_data, coord_transform=None, visua
 
     # Visualize
     if visualize:
+        # visualize pixel-wise major lighting direction
         vis_light_direct = (major_light_direct + 1.0) / 2.0
         vis_normal = (or_data["normal"] + 1.0) / 2.0
         vis = [or_data["srgb_img"], vis_normal, or_data["gt_S"],
                vis_light_direct, mask_strong_directional, vis_light_direct * mask_strong_directional]
         titles = ["srgb_img", "normal", "gt_S",
                   "major_light_direct", "mask_strong_directional", "strong_directional_light"]
+        # select the brightest pixel
+        gt_s = or_data["gt_S"]  # C X H X W
+        resize_as_s = torchvision.transforms.Resize(gt_s.shape[1:3], antialias=True)
+        intensity = gt_s.mean(dim=0, keepdim=True)
+        area_avg_intensity = torch.nn.functional.avg_pool2d(intensity.unsqueeze(0), 5, stride=1, padding=2).squeeze(0)
+        area_avg_intensity *= mask_strong_directional
+        assert area_avg_intensity.ndim == 3 and area_avg_intensity.shape[0] == 1
+        v, max_idx = torch.max(area_avg_intensity.view(-1), dim=0)
+        y, x = divmod(max_idx.item(), area_avg_intensity.shape[2])
+        circled_input = image_util.draw_a_circle(resize_as_s(or_data["srgb_img"]), (x, y),
+                                                 radius=3, color=(255, 0, 0), thickness=2)
+        scaled_area_avg = area_avg_intensity / area_avg_intensity.max()
+        scaled_area_avg = image_util.draw_a_circle(scaled_area_avg, (x, y),
+                                                   radius=3, color=(1, 0, 0), thickness=2)
+        # print(f"value {v}: {area_avg_intensity[0, y, x]}. ({x, y})")
+        # print(f"s: {scaled_area_avg[:, y, x]}")
+        vis += [circled_input, area_avg_intensity, scaled_area_avg]
+        titles += ["circled_input", "area_avg_intensity", "scaled_area_avg"]
         image_util.display_images(vis, titles, columns=4, show=True)
+        # visualize the environment maps of the brightest pixel
     return major_light_direct, mask_strong_directional
