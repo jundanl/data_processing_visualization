@@ -43,7 +43,7 @@ def spherical_gaussian_parameters_2_cartesian(sgs, coord_transform=None, normal=
 
 
 # Estimate the pixel-wise dominant lighting directions from the environment maps
-def estimate_pw_dominant_lighting_direction(or_data, coord_transform=None):
+def estimate_pw_dominant_lighting_direction(or_data, coord_transform=None, visualize=False):
     # Get data
     pw_sgs = or_data["SG_env"]
     assert pw_sgs.ndim == 4 and pw_sgs.shape[1] == 6, \
@@ -78,4 +78,14 @@ def estimate_pw_dominant_lighting_direction(or_data, coord_transform=None):
     is_strong_light = max_w < weight_mean * 10.0  # 12 X 1 X H X W
     num_other_strong_light = (dissimilar_direct * is_strong_light).to(torch.float32).sum(dim=0)  # 1 X H X W
     mask_strong_directional = mask_strong_directional * (num_other_strong_light < 0.1)  # 1 X H X W
+
+    # Visualize
+    if visualize:
+        vis_light_direct = (major_light_direct + 1.0) / 2.0
+        vis_normal = (or_data["normal"] + 1.0) / 2.0
+        vis = [or_data["srgb_img"], vis_normal, or_data["gt_S"],
+               vis_light_direct, mask_strong_directional, vis_light_direct * mask_strong_directional]
+        titles = ["srgb_img", "normal", "gt_S",
+                  "major_light_direct", "mask_strong_directional", "strong_directional_light"]
+        image_util.display_images(vis, titles, columns=4, show=True)
     return major_light_direct, mask_strong_directional
