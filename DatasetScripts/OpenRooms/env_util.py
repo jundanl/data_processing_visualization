@@ -17,6 +17,31 @@ def spherical_to_cartesian(spherical_coords: torch.tensor):
     return torch.cat([x, y, z], dim=0)
 
 
+
+def spherical_gaussian_parameters_2_cartesian(sgs, coord_transform=None, normal=None):
+    assert sgs.shape[1] == 6, \
+        "sgs should have 6 channels: theta, phi, lamb, weight"  # N X 6 [X H X W]
+    theta, phi, lamb, weight = torch.split(sgs, [1, 1, 1, 3], dim=1)  # N X C [X H X W]
+    sg_sph_mean = torch.cat([theta, phi,
+                             torch.ones_like(theta)],
+                            dim=1)  # N X 3 [X H X W]
+    swap_dims = list(range(sgs.ndim))
+    swap_dims[0], swap_dims[1] = 1, 0
+    sg_cart_mean = spherical_to_cartesian(sg_sph_mean.permute(*swap_dims))  # 3 X N [X H X W]
+    sg_cart_mean = sg_cart_mean.permute(*swap_dims)  # N X 3 [X H X W]
+    if coord_transform is not None:  # transform the coordinates to the world/camera system
+        assert normal is not None, "normal should be provided when coord_transform is not None"
+        assert normal.ndim == 3 and sgs.ndim == 4
+        if sgs.ndim == 4:
+            resize = torchvision.transforms.Resize(sgs.shape[2:4], antialias=True)
+            normal = resize(normal)
+            normal = normal / torch.linalg.vector_norm(normal, ord=2, dim=0, keepdim=True).clamp(min=1e-6)
+            sg_cart_mean = coord_transform(sg_cart_mean, normal)  # N X 3 [X H X W]
+        else:
+            assert False, "Not implemented"
+    return sg_cart_mean, lamb, weight
+
+
 # Estimate the pixel-wise dominant lighting directions from the environment maps
 def estimate_pw_dominant_lighting_direction(or_data, coord_transform=None):
     # Get data
@@ -29,23 +54,14 @@ def estimate_pw_dominant_lighting_direction(or_data, coord_transform=None):
     mask_light = (mask_light > 0.1).to(torch.float32)
 
     # Spherical gaussian parameters
-    theta, phi, lamb, weight = torch.split(pw_sgs, [1, 1, 1, 3], dim=1)  # 12 X C X H X W
-    sg_sph_coords = torch.cat([theta, phi,
-                               torch.ones_like(theta)],
-                              dim=1)  # 12 X 3 X H X W
-    sg_cart_coords = spherical_to_cartesian(sg_sph_coords.permute(1, 0, 2, 3))  # 3 X 12 X H X W
-    sg_cart_coords = sg_cart_coords.permute(1, 0, 2, 3)  # 12 X 3 X H X W
-    if coord_transform is not None:  # transform the coordinates to the world/camera system
-        normal = or_data["normal"]
-        normal = resize(normal)
-        normal = normal / torch.linalg.norm(normal, ord=2, dim=0, keepdim=True).clamp(min=1e-6)
-        sg_cart_coords = coord_transform(sg_cart_coords, normal)  # 12 X 3 X H X W
+    sg_cart_mean, lamb, weight = \
+        spherical_gaussian_parameters_2_cartesian(pw_sgs, coord_transform=coord_transform, normal=or_data["normal"])
 
     # Find the dominant lighting direction according to the weight
     weight_mean = weight.mean(dim=1, keepdim=True)  # 12 X 1 X H X W
     max_w, max_idx = torch.max(weight_mean, dim=0, keepdim=True)  # 1 X 1 X H X W
-    max_idx = max_idx.repeat(1, sg_cart_coords.shape[1], 1, 1)  # 1 X 3 X H X W
-    major_light_direct = torch.gather(sg_cart_coords, dim=0, index=max_idx).squeeze(0)  # 3 X H X W
+    max_idx = max_idx.repeat(1, sg_cart_mean.shape[1], 1, 1)  # 1 X 3 X H X W
+    major_light_direct = torch.gather(sg_cart_mean, dim=0, index=max_idx).squeeze(0)  # 3 X H X W
     # debug gathering
     # _midx = max_idx[0, 0, :, :]
     # _H, _W = _midx.shape
@@ -58,7 +74,7 @@ def estimate_pw_dominant_lighting_direction(or_data, coord_transform=None):
 
     # Exclude non-directional lighting areas
     mask_strong_directional = 1.0 - mask_light
-    dissimilar_direct = (major_light_direct[None] * sg_cart_coords).sum(dim=1, keepdim=True) < 0.95  # 12 X 1 X H X W
+    dissimilar_direct = (major_light_direct[None] * sg_cart_mean).sum(dim=1, keepdim=True) < 0.95  # 12 X 1 X H X W
     is_strong_light = max_w < weight_mean * 10.0  # 12 X 1 X H X W
     num_other_strong_light = (dissimilar_direct * is_strong_light).to(torch.float32).sum(dim=0)  # 1 X H X W
     mask_strong_directional = mask_strong_directional * (num_other_strong_light < 0.1)  # 1 X H X W

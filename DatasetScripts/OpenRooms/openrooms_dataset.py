@@ -330,6 +330,7 @@ def transform_SG_to_camera_system(sg_cart_coords: torch.tensor, normal: torch.te
 
 
 def check_dataset_split(dataset_openrooms, batch_size, num_workers, disp_iters, visualize_dir=None) -> None:
+    assert False, "This function is not modified according to OpenRoomsDataset yet."
     if visualize_dir is not None:
         if not os.path.exists(visualize_dir):
             os.makedirs(visualize_dir)
@@ -354,6 +355,7 @@ def check_dataset_split(dataset_openrooms, batch_size, num_workers, disp_iters, 
 
 
 def is_OpenRooms_complete(dataset_dir: str, batch_size=8, num_workers=1, visualize_dir=None) -> bool:
+    assert False, "This function is not modified according to OpenRoomsDataset yet."
     if visualize_dir is not None:
         if not os.path.exists(visualize_dir):
             os.makedirs(visualize_dir)
@@ -379,6 +381,7 @@ def is_OpenRooms_complete(dataset_dir: str, batch_size=8, num_workers=1, visuali
 
 
 def get_train_val_test_sets(dataset_dir: str):
+    assert False, "This function is not modified according to OpenRoomsDataset yet."
     return OpenRoomsDataset(dataset_dir, "train"), \
            OpenRoomsDataset(dataset_dir, "val"), \
            OpenRoomsDataset(dataset_dir, "test")
