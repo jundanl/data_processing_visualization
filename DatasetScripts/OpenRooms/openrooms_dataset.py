@@ -307,26 +307,45 @@ class OpenRoomsDataset(data.Dataset):
                 "dataset": "OpenRooms"}
 
 
-def transform_SG_to_camera_system(sg_cart_coords: torch.tensor, normal: torch.tensor):
+def transform_coordinates_to_camera_system(cart_coords: torch.tensor, normal: torch.tensor):
+    """
+    Transform cartesian coordinates from the local surface system to the global camera system.
+    Camera Coordinate System:
+          Y
+          ^
+          |
+          |
+          |
+          |--------> X
+        /
+      /
+     Z
+    :param cart_coords: N X 3 X height X width
+    :param normal: 3 X height X width
+    :return: cam_view_coords: N X 3 X height X width, in camera coordinate system.
+    """
     # Check the shape of env_sgs and normal
-    assert sg_cart_coords.ndim == 4 and sg_cart_coords.shape[1] == 3, \
-        f"sg_cart_coords should be in shape (numSGs, 3, height, width), but got {sg_cart_coords.shape}"
+    assert cart_coords.ndim == 4 and cart_coords.shape[1] == 3, \
+        f"cart_coords should be in shape (N, 3, height, width), but got {cart_coords.shape}"
     assert normal.ndim == 3 and normal.shape[0] == 3, \
         f"normal should be in shape (3, height, width), but got {normal.shape}"
+    assert cart_coords.shape[2:] == normal.shape[1:], \
+        f"cart_coords and normal should have the same height and width, " \
+        f"but got {cart_coords.shape} and {normal.shape}"
 
-    # Transform SGs to camera system.
+    # Transform to camera system.
     # Modified from: https://github.com/lzqsd/InverseRenderingOfIndoorScene/blob/master/models.py
-    device = sg_cart_coords.device
+    device = cart_coords.device
     normal = normal / torch.linalg.norm(normal, ord=2, dim=0, keepdim=True).clamp(min=1e-6)
     up = torch.tensor([0, 1, 0], dtype=torch.float32, device=device, requires_grad=False)
     normal = normal.unsqueeze(0)  # (1, 3, height, width)
     camyProj = torch.einsum('b,abcd->acd', (up, normal)).unsqueeze(1).expand_as(normal) * normal  # (1, 3, height, width)
     camy = F.normalize(up.unsqueeze(0).unsqueeze(-1).unsqueeze(-1).expand_as(camyProj) - camyProj, dim=1) # (1, 3, height, width)
     camx = -F.normalize(torch.cross(camy, normal, dim=1), dim=1)  # (1, 3, height, width)
-    cam_view_sg = sg_cart_coords[:, 0:1, :, :] * camx + \
-                  sg_cart_coords[:, 1:2, :, :] * camy + \
-                  sg_cart_coords[:, 2:3, :, :] * normal
-    return cam_view_sg
+    cam_view_coords = cart_coords[:, 0:1, :, :] * camx + \
+                      cart_coords[:, 1:2, :, :] * camy + \
+                      cart_coords[:, 2:3, :, :] * normal
+    return cam_view_coords
 
 
 def check_dataset_split(dataset_openrooms, batch_size, num_workers, disp_iters, visualize_dir=None) -> None:

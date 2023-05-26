@@ -287,7 +287,7 @@ def dilate_mask(mask, k=5):
 def display_images(_images, titles=None, figsize_base=4, columns=3, show=True):
     num_images = len(_images)
     rows = (num_images + columns - 1) // columns
-    figsize = (figsize_base * columns, int(figsize_base * rows * 0.75))
+    figsize = (figsize_base * columns, int(figsize_base * rows * 0.8))
     fig, axs = plt.subplots(rows, columns, figsize=figsize)
     axs = axs.ravel()
     for i, img in enumerate(_images):
@@ -302,9 +302,9 @@ def display_images(_images, titles=None, figsize_base=4, columns=3, show=True):
             axs[i].set_title(titles[i])
     for i in range(len(_images), rows * columns):
         axs[i].axis('off')
+    plt.tight_layout()
     if show:
         plt.show()
-    plt.tight_layout()
     return plt
 
 

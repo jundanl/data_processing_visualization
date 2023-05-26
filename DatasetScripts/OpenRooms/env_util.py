@@ -4,8 +4,24 @@ import torchvision
 import image_util
 
 
-# Convert spherical coordinate to cartesian coordinate
 def spherical_to_cartesian(spherical_coords: torch.tensor):
+    """
+    Convert spherical coordinates to cartesian coordinates.
+    Local cartesian and spherical coordinate systems:
+        theta: clockwise angle from Z axis,
+        phi: clockwise angle from X axis
+          Z
+          ^        X
+          |theta/
+          |   /
+          | /
+          |--------> Y
+        /  \ phi
+      /     \
+    /        \
+    :param spherical_coords: 3 X N X ...
+    :return: cartesian_coords: 3 X N X ...
+    """
     assert spherical_coords.ndim >= 2 and spherical_coords.shape[0] == 3, \
         "the first dimension of spherical_coords should be 3"  # spherical_coords: 3 X N X ...
     # r: radius, theta: polar angle, phi: azimuthal angle
@@ -17,8 +33,14 @@ def spherical_to_cartesian(spherical_coords: torch.tensor):
     return torch.cat([x, y, z], dim=0)
 
 
-
 def spherical_gaussian_parameters_2_cartesian(sgs, coord_transform=None, normal=None):
+    """
+    Convert the mean vectors of spherical gaussian to the cartesian coordinate system.
+    :param sgs:  N X 6 [X H X W], where N is the number of spherical gaussian lobes
+    :param coord_transform: a function that transforms the SG to another coordinate system
+    :param normal: the surface normal vector(s)/map
+    :return: sg_cart_mean: N X 3 [X H X W], sg_lamb: N X 1 [X H X W], sg_weight: N X 3 [X H X W]
+    """
     assert sgs.shape[1] == 6, \
         "sgs should have 6 channels: theta, phi, lamb, weight"  # N X 6 [X H X W]
     theta, phi, lamb, weight = torch.split(sgs, [1, 1, 1, 3], dim=1)  # N X C [X H X W]
@@ -42,8 +64,25 @@ def spherical_gaussian_parameters_2_cartesian(sgs, coord_transform=None, normal=
     return sg_cart_mean, lamb, weight
 
 
-# Estimate the pixel-wise dominant lighting directions from the environment maps
 def estimate_pw_dominant_lighting_direction(or_data, coord_transform=None, visualize=False):
+    """
+    Estimate the pixel-wise dominant lighting directions from the SG environment representation.
+        Camera Coordinate System:
+          Y
+          ^
+          |
+          |
+          |
+          |--------> X
+        /
+      /
+     Z
+    :param or_data: data from the OpenRooms dataset
+    :param coord_transform: a function to transform the coordinates to the world/camera system
+    :param visualize: whether to visualize the results
+    :return: direct_of_major_light: the pixel-wise dominant lighting directions, 3 X height X width
+            mask_light: the mask indicating the pixels lit by directional lighting, 1 X height X width
+    """
     # Get data
     pw_sgs = or_data["SG_env"]
     assert pw_sgs.ndim == 4 and pw_sgs.shape[1] == 6, \
@@ -102,10 +141,19 @@ def estimate_pw_dominant_lighting_direction(or_data, coord_transform=None, visua
         scaled_area_avg = area_avg_intensity / area_avg_intensity.max()
         scaled_area_avg = image_util.draw_a_circle(scaled_area_avg, (x, y),
                                                    radius=3, color=(1, 0, 0), thickness=2)
+        l_direct_at_xy = direct_of_major_light[:, y, x].tolist()
+        l_direct_at_xy = [f'{v:.2f}' for v in l_direct_at_xy]
+        print(f"Major lighting directiong at {(x, y)}: {l_direct_at_xy}")
         # print(f"value {v}: {area_avg_intensity[0, y, x]}. ({x, y})")
         # print(f"s: {scaled_area_avg[:, y, x]}")
         vis += [circled_input, area_avg_intensity, scaled_area_avg]
-        titles += ["circled_input", "area_avg_intensity", "scaled_area_avg"]
-        image_util.display_images(vis, titles, columns=4, show=True)
+        titles += ["circled_input", "area_avg_intensity", f"scaled_area_avg\n{l_direct_at_xy}"]
+        image_util.display_images(vis, titles, columns=5, show=True)
         # visualize the environment maps of the brightest pixel
-    return major_light_direct, mask_strong_directional
+        # _, _, (vis_envs, vis_env_titles) = render_spherical_gaussian_env_maps(
+        #     pw_sgs[:, :, y, x],
+        #     coord_transform=coord_transform,
+        #     normal=normal[:, y, x],
+        #     visualize=True)
+        # image_util.display_images(vis + vis_envs, titles + vis_env_titles, columns=5, show=True)
+    return direct_of_major_light, mask_strong_directional
