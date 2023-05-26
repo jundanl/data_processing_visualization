@@ -70,6 +70,119 @@ def spherical_gaussian_parameters_2_cartesian(sgs, coord_transform=None, normal=
     return sg_cart_mean, lamb, weight
 
 
+def panorama_spherical_coords(height: int, width: int, theta_max: float, phi_max: float):
+    """
+    Create spherical coordinates for a panorama:
+    generates a grid of spherical coordinates (theta, phi) for each pixel in the panorama image.
+    Local cartesian and spherical coordinate systems:
+    (Note that the axis orientations are different from the camera coordinate system)
+        theta: clockwise angle from Z axis,
+        phi: clockwise angle from X axis
+          Z
+          ^        X
+          |theta/
+          |   /
+          | /
+          |--------> Y
+        /  \ phi
+      /     \
+    /        \
+
+    :param height: the height of the panorama image
+    :param width: the width of the panorama image
+    :param theta_max: the maximum polar angle
+    :param phi_max: the maximum azimuthal angle
+    :return: spherical_coords: 3 X height X width, spherical coordinates of the panorama image
+    """
+    # Create a grid of spherical coordinates
+    theta_range = ((torch.arange(height, dtype=torch.float32) + 0.5) / height) * theta_max
+    phi_range = ((torch.arange(width, dtype=torch.float32) + 0.5) / width - 0.5) * phi_max
+    theta, phi = torch.meshgrid(theta_range, phi_range, indexing="ij")
+    # Convert grid coordinates to spherical coordinates
+    # y_coords, x_coords = torch.meshgrid(torch.linspace(0, 1, height), torch.linspace(0, 1, width),
+    #                                     indexing="ij")
+    # theta = y_coords * theta_max
+    # phi = x_coords * phi_max
+
+    # Concatenate theta and phi to create the spherical coordinates tensor
+    spherical_coords = torch.stack([theta, phi, torch.ones_like(theta)], dim=0)
+    return spherical_coords  # 3 X height X width
+
+
+def render_spherical_gaussian_env_maps(sgs: torch.tensor, height: int = 180, width: int = 360,
+                                       coord_transform=None, normal=None, visualize=False):
+    """
+    Render spherical gaussian environment maps at one location.
+    :param sgs: N X 6, where N is the number of spherical gaussian lobes
+    :param height: the height of the rendered environment map
+    :param width: the width of the rendered environment map
+    :param coord_transform: a function that transforms the SG to another coordinate system
+    :param normal: the surface normal vector of the surface
+    :param visualize: whether to return the visualized rendered environment maps
+    :return:    env_sum: 3 X height X width, final rendered environment map
+                env_maps: N X 3 X height X width, environment maps of each spherical gaussian lobe
+                # (vis, titles): the visualized rendered environment maps and their titles
+    """
+    # Check the input shape
+    assert sgs.ndim == 2 and sgs.shape[1] == 6, \
+        "sgs should be: N X 6"  # N: number of spherical gaussian lobes
+
+    # Compute a grid of cartesian coordinates (X, Y, Z) for each pixel in the panorama.
+    pano_sph_coords = panorama_spherical_coords(height, width,
+                                                torch.pi, 2 * torch.pi)  # 3 X H X W
+    _pano_cart_coords = spherical_to_cartesian(pano_sph_coords) # 3 X H X W
+
+    # Reorient the axes to conform to the camera coordinate system: [X, Y, Z] -> [Y, Z, -X]
+    pano_cart_coords = torch.zeros_like(_pano_cart_coords)
+    pano_cart_coords[0, :, :] = _pano_cart_coords[1, :, :]
+    pano_cart_coords[1, :, :] = _pano_cart_coords[2, :, :]
+    pano_cart_coords[2, :, :] = -_pano_cart_coords[0, :, :]
+    pano_cart_coords = pano_cart_coords[None]  # 1 X 3 X H X W
+    # print("Verifying the spherical coordinates to cartesian coordinates conversion:")
+    # veri_x = [0, width//4,  width//2,  width*3//4,  0,         width//2,  width-1,       0, width-1]
+    # veri_y = [0, height//3, height//3, height//3,   height//2, height//2, height//2,   height-1, height-1]
+    # for i in range(len(veri_x)):
+    #     x = veri_x[i]
+    #     y = veri_y[i]
+    #     print(f"Img ({y}, {x}): {pano_sph_coords[:-1, y, x]/torch.pi*180} => {pano_cart_coords[0, :, y, x]}")
+
+    # Compute the cartesian coordinates of the spherical gaussian parameters
+    sg_cart_mean, sg_lamb, sg_weight = spherical_gaussian_parameters_2_cartesian(sgs, coord_transform, normal)
+    sg_cart_mean = sg_cart_mean[:, :, None, None]  # 12 X 3 X 1 X 1
+    sg_lamb = sg_lamb[:, :, None, None]  # 12 X 1 X 1 X 1
+    sg_weight = sg_weight[:, :, None, None]  # 12 X 3 X 1 X 1
+    # for i in range(sg_cart_mean.shape[0]):
+    #     print(f"SG {i}:")
+    #     print(f"  mean: {sg_cart_mean[i, :, 0, 0]}")
+    #     print(f"  lamb: {sg_lamb[i, :, 0, 0].item():.2f}")
+    #     print(f"  weight: {sg_weight[i, :, 0, 0].mean().item():.2f}")
+
+    # Render the SG environment maps
+    dot_product = torch.sum(pano_cart_coords * sg_cart_mean, dim=1, keepdim=True)  # 12 X 1 X height X width
+    e = torch.exp(-sg_lamb * (1 - dot_product))  # 12 X 1 X height X width
+    envs = e * sg_weight  # 12 X 3 X height X width
+    env_sum = envs.sum(dim=0)  # 3 X height X width
+    # print(sg_theta.shape, sg_phi.shape, sg_lamb.shape, sg_weight.shape, envs.shape, env_sum.shape)
+
+    # Visualize the environment maps
+    if visualize:
+        vis = [(pano_cart_coords[0] + 1) / 2.0]  # 3 X H X W
+        titles = ["Pano cartesian coords in camera"]
+        vis += [envs[i]/envs[i].max() for i in range(envs.shape[0])]
+        for i in range(envs.shape[0]):
+            # Format each element of mean and weight to 2 decimal places
+            mean = [f'{m:.2f}' for m in sg_cart_mean[i, :, 0, 0].tolist()]
+            # weight = [f'{w:.2f}' for w in sg_weight[i, :, 0, 0].tolist()]
+            titles += [f"SG {i}:\n"
+                       f"  mean: {mean}\n"
+                       f"  lamb: {sg_lamb[i, 0, 0, 0]:.2f}\n"
+                       f"  weight: {sg_weight[i, :, 0, 0].mean():.2f}"]
+        vis += [env_sum/env_sum.max()]
+        titles += ["Sum env"]
+        image_util.display_images(vis, titles, figsize_base=5, columns=3, show=True)
+    return env_sum, envs
+
+
 def estimate_pw_dominant_lighting_direction(or_data, coord_transform=None, visualize=False):
     """
     Estimate the pixel-wise dominant lighting directions from the SG environment representation.
@@ -161,10 +274,10 @@ def estimate_pw_dominant_lighting_direction(or_data, coord_transform=None, visua
         titles += ["circled_input", "area_avg_intensity", f"scaled_area_avg\n{l_direct_at_xy}"]
         image_util.display_images(vis, titles, columns=5, show=True)
         # visualize the environment maps of the brightest pixel
-        # _, _, (vis_envs, vis_env_titles) = render_spherical_gaussian_env_maps(
-        #     pw_sgs[:, :, y, x],
-        #     coord_transform=coord_transform,
-        #     normal=normal[:, y, x],
-        #     visualize=True)
+        _, _ = render_spherical_gaussian_env_maps(
+            pw_sgs[:, :, y, x],
+            coord_transform=coord_transform,
+            normal=normal[:, y, x],
+            visualize=True)
         # image_util.display_images(vis + vis_envs, titles + vis_env_titles, columns=5, show=True)
     return direct_of_major_light, mask_strong_directional
