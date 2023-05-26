@@ -108,33 +108,36 @@ def estimate_pw_dominant_lighting_direction(or_data, coord_transform=None, visua
     weight_mean = weight.mean(dim=1, keepdim=True)  # 12 X 1 X H X W
     max_w, max_idx = torch.max(weight_mean, dim=0, keepdim=True)  # 1 X 1 X H X W
     max_idx = max_idx.repeat(1, sg_cart_mean.shape[1], 1, 1)  # 1 X 3 X H X W
-    major_light_direct = torch.gather(sg_cart_mean, dim=0, index=max_idx).squeeze(0)  # 3 X H X W
+    direct_of_major_light = torch.gather(sg_cart_mean, dim=0, index=max_idx).squeeze(0)  # 3 X H X W
+    lamb_of_major_light = torch.gather(lamb, dim=0, index=max_idx[:, 0:1, :, :]).squeeze(0)  # 1 X H X W
     # debug gathering
     # _midx = max_idx[0, 0, :, :]
     # _H, _W = _midx.shape
     # s = torch.zeros(3, _H, _W)
     # for y in range(_H):
     #     for x in range(_W):
-    #         s[:, y, x] = sg_cart_coords[_midx[y, x], :, y, x]
+    #         s[:, y, x] = sg_cart_mean[_midx[y, x], :, y, x]
     # print(major_light_direct.shape, s.shape)
     # assert torch.eq(s, major_light_direct).all(), f"major_light_direct should be the same as s"
 
-    # Exclude non-directional lighting areas
-    mask_strong_directional = 1.0 - mask_light
-    dissimilar_direct = (major_light_direct[None] * sg_cart_mean).sum(dim=1, keepdim=True) < 0.95  # 12 X 1 X H X W
+    # Label highly-directional lighting areas
+    mask_strong_directional = 1.0 - mask_light  # Exclude light sources
+    mask_strong_directional *= lamb_of_major_light > 200.0  # Narrow spread
+    # cos(10 degrees) = 0.9848
+    is_dissimilar_light = (direct_of_major_light[None] * sg_cart_mean).sum(dim=1, keepdim=True) < 0.9848  # 12 X 1 X H X W
     is_strong_light = max_w < weight_mean * 10.0  # 12 X 1 X H X W
-    num_other_strong_light = (dissimilar_direct * is_strong_light).to(torch.float32).sum(dim=0)  # 1 X H X W
-    mask_strong_directional = mask_strong_directional * (num_other_strong_light < 0.1)  # 1 X H X W
+    num_other_competitive_lights = (is_dissimilar_light * is_strong_light).to(torch.float32).sum(dim=0)  # 1 X H X W
+    mask_strong_directional = mask_strong_directional * (num_other_competitive_lights < 0.1)  # 1 X H X W
 
     # Visualize
     if visualize:
         # visualize pixel-wise major lighting direction
-        vis_light_direct = (major_light_direct + 1.0) / 2.0
-        vis_normal = (or_data["normal"] + 1.0) / 2.0
+        vis_light_direct = (direct_of_major_light + 1.0) / 2.0
+        vis_normal = (normal + 1.0) / 2.0
         vis = [or_data["srgb_img"], vis_normal, or_data["gt_S"],
                vis_light_direct, mask_strong_directional, vis_light_direct * mask_strong_directional]
         titles = ["srgb_img", "normal", "gt_S",
-                  "major_light_direct", "mask_strong_directional", "strong_directional_light"]
+                  "direct_of_major_light", "mask_strong_directional", "strong_directional_light"]
         # select the brightest pixel
         gt_s = or_data["gt_S"]  # C X H X W
         resize_as_s = torchvision.transforms.Resize(gt_s.shape[1:3], antialias=True)
