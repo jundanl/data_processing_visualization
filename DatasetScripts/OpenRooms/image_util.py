@@ -289,7 +289,7 @@ def display_images(_images, titles=None, figsize_base=4, columns=3, show=True):
     rows = (num_images + columns - 1) // columns
     figsize = (figsize_base * columns, int(figsize_base * rows * 0.8))
     fig, axs = plt.subplots(rows, columns, figsize=figsize)
-    axs = axs.ravel()
+    axs = np.array(axs).ravel()  # Make sure axs is always a 1D array
     for i, img in enumerate(_images):
         if torch.is_tensor(img):
             img = img.numpy().transpose(1, 2, 0)
