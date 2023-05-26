@@ -53,14 +53,20 @@ def spherical_gaussian_parameters_2_cartesian(sgs, coord_transform=None, normal=
     sg_cart_mean = sg_cart_mean.permute(*swap_dims)  # N X 3 [X H X W]
     if coord_transform is not None:  # transform the coordinates to the world/camera system
         assert normal is not None, "normal should be provided when coord_transform is not None"
-        assert normal.ndim == 3 and sgs.ndim == 4
-        if sgs.ndim == 4:
-            resize = torchvision.transforms.Resize(sgs.shape[2:4], antialias=True)
-            normal = resize(normal)
-            normal = normal / torch.linalg.vector_norm(normal, ord=2, dim=0, keepdim=True).clamp(min=1e-6)
-            sg_cart_mean = coord_transform(sg_cart_mean, normal)  # N X 3 [X H X W]
-        else:
-            assert False, "Not implemented"
+        if sg_cart_mean.ndim == 2:  # N X 3
+            assert normal.ndim == 1 and normal.shape[0] == 3, \
+                "normal should be a 3D vector when sg_cart_mean is a 2D tensor"
+            sg_cart_mean = sg_cart_mean[:, :, None, None]
+            normal = normal[:, None, None]
+        assert sg_cart_mean.ndim == 4 and normal.ndim == 3 and \
+               sg_cart_mean.shape[2:] == normal.shape[1:], \
+               "sg_cart_mean and normal should have the same height and width"
+        # resize = torchvision.transforms.Resize(sgs.shape[2:4], antialias=True)
+        # normal = resize(normal)
+        # normal = normal / torch.linalg.vector_norm(normal, ord=2, dim=0, keepdim=True).clamp(min=1e-6)
+        sg_cart_mean = coord_transform(sg_cart_mean, normal)  # N X 3 X H X W
+        if sg_sph_mean.ndim == 2:
+            sg_cart_mean = sg_cart_mean.squeeze(2).squeeze(2)  # N X 3
     return sg_cart_mean, lamb, weight
 
 
@@ -93,8 +99,10 @@ def estimate_pw_dominant_lighting_direction(or_data, coord_transform=None, visua
     mask_light = (mask_light > 0.01).to(torch.float32)
 
     # Spherical gaussian parameters
+    normal = resize(or_data["normal"])
+    normal = normal / torch.linalg.vector_norm(normal, ord=2, dim=0, keepdim=True).clamp(min=1e-6)
     sg_cart_mean, lamb, weight = \
-        spherical_gaussian_parameters_2_cartesian(pw_sgs, coord_transform=coord_transform, normal=or_data["normal"])
+        spherical_gaussian_parameters_2_cartesian(pw_sgs, coord_transform=coord_transform, normal=normal)
 
     # Find the dominant lighting direction according to the weight
     weight_mean = weight.mean(dim=1, keepdim=True)  # 12 X 1 X H X W
